@@ -1,0 +1,6 @@
+// Check usb attach in cmd
+usbipd list
+usbipd attach --wsl --busid 1-1
+
+// Check in wsl 
+lsusb
