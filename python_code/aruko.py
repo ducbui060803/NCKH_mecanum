@@ -217,7 +217,7 @@ def normalize_angle_deg(angle):
 while True:
 #while not rospy.is_shutdown():
     ret, frame = cap.read()
-    frame = cv2.GaussianBlur(frame, (5, 5), 0)
+    # frame = cv2.GaussianBlur(frame, (5, 5), 0)
 
     #frame = cv2.flip(frame,1)
     #height, width, m = frame.shape
@@ -283,10 +283,7 @@ while True:
                         if phiaruco > 0:
                             phiaruco = -180
                         updated_id11_once = True
-                    print(f"kkk:{phiaruco}")
                     marker_info = [xaruco,yaruco,phiaruco]
-
-
                     all_marker.append(marker_info)
                     distance_infor.append(distance)
                 else:

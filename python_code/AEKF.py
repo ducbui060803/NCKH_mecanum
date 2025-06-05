@@ -1,35 +1,46 @@
 #!/usr/bin/env python3
-
+#truoc khi sua
 import socket
 import numpy as np
+import math
 import rospy
 from std_msgs.msg import Float32MultiArray
 import time
 
+v = 0
+pre_v = 0
+acc_prev = 0
+yaw = 0
 PORT = 5005
 
 def publish_pose(pose):
     position = Float32MultiArray()
-    position.data = [pose['x'], pose['y'], pose['phi'], pose['v']]  # Gửi 4 giá trị
+    position.data = [pose['x'], pose['y'], pose['phi'], pose['v'],pose['pose_x'], pose['pose_y'], pose['pose_phi']]  # Gửi 4 giá trị
     pose_pub.publish(position)
 
 
 class EKF:
-    def __init__(self, dt, Q_fixed, R_fixed):
+    def __init__(self, dt, alpha_Q, alpha_R, Q_init, R_init):
         """ Khởi tạo EKF với ma trận nhiễu Q và R cố định """
         self.dt = dt  # Bước thời gian (delta_t)
-
+        self.alpha_Q = alpha_Q  # Hệ số quên cho nhiễu quá trình
+        self.alpha_R = alpha_R  # Hệ số quên cho nhiễu đo lường
         # Trạng thái hệ thống x_t = [x, y, phi, v]
-        self.x_t = np.zeros((4, 1))  
+        self.x_t = np.array([
+                            [0.0],         # x
+                            [-1.0],        # y
+                            [np.pi],       # phi
+                            [0.0]          # v
+                        ])              
 
         # Ma trận hiệp phương sai trạng thái P_t
         self.P_t = np.diag([0.1, 0.1, 0.1, 0.1])
 
         # Ma trận nhiễu quá trình Q_t (Cố định)
-        self.Q_t = np.diag(Q_fixed)
+        self.Q_t = np.diag(Q_init)
 
         # Ma trận nhiễu đo lường R_t (Cố định)
-        self.R_t = np.diag(R_fixed)
+        self.R_t = np.diag(R_init)
 
         # Ma trận đo lường H_t
         self.H_t = np.array([
@@ -37,8 +48,15 @@ class EKF:
             [0, 1, 0, 0],  # Y đo từ camera
             [0, 0, 1, 0]   # Phi đo từ camera
         ])
-    
+           # Ma trận hiệp phương sai của Innovation
+        self.S_t = self.H_t @ self.P_t @ self.H_t.T + self.R_t
+
+        # Tính Kalman Gain
+        self.K_t = self.P_t @ self.H_t.T @ np.linalg.inv(self.S_t)
+
     def predict(self, u_t):
+        global pre_v
+        global acc_prev
         """ Bước dự đoán trạng thái với đầu vào điều khiển u_t = [omega, v] """
         phi_t = self.x_t[2, 0]  # Góc quay hiện tại
         v_t = self.x_t[3, 0]    # Vận tốc hiện tại
@@ -47,54 +65,101 @@ class EKF:
         F_t = np.array([
             [1, 0, -self.dt * v_t * np.sin(phi_t), self.dt * np.cos(phi_t)],
             [0, 1, self.dt * v_t * np.cos(phi_t), self.dt * np.sin(phi_t)],
-            [0, 0, 1, self.dt],
+            [0, 0, 1, 0],
             [0, 0, 0, 1]
         ])
+        acc = 0.8 * acc_prev + 0.2 * (u_t[0] - pre_v)
 
         # Ma trận điều khiển B_t
         B_t = np.array([
-            [np.cos(phi_t) * self.dt, 0],
-            [np.sin(phi_t) * self.dt, 0],
-            [0, self.dt],
-            [1, 0]
-        ])
-
+                [np.cos(phi_t) * dt * u_t[0]],
+                [np.sin(phi_t) * dt * u_t[0]],
+                [u_t[1]],
+                # [u_t[0]-pre_v]
+                [acc]
+            ])
+        # print(f"v_truoc: {self.x_t[3]}")
         # Dự đoán trạng thái mới
-        self.x_t = self.x_t + B_t @ u_t  # x_t|t-1 = f(x_t-1, u_t)
+        self.x_t = self.x_t + B_t   # x_t|t-1 = f(x_t-1, u_t)
+        # print(f"v_sau: {self.x_t[3]}")
+
+        acc_prev = acc
         self.P_t = F_t @ self.P_t @ F_t.T + self.Q_t  # Cập nhật ma trận hiệp phương sai P_t|t-1
-    
+        self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
+
+        # Predict state and covariance
+        # self.x_t = self.x_t + B_t @ u_t.reshape(-1, 1)
+        # self.P_t = F_t @ self.P_t @ F_t.T
+
     def update(self, z_t):
         """ Bước cập nhật trạng thái với đo lường mới z_t = [x_meas, y_meas, phi_meas] """
         # Sai số đo lường (Innovation)
         d_t = z_t - self.H_t @ self.x_t  
-
+        self.Q_t = self.alpha_Q * self.Q_t + (1 - self.alpha_Q) * (self.K_t @ d_t @ d_t.T @ self.K_t.T)
+        print(f'{self.Q_t}')
+        # Cập nhật động ma trận nhiễu đo lường R_t
+        residual_t = z_t - self.H_t @ self.x_t
+        self.R_t = self.alpha_R * self.R_t + (1 - self.alpha_R) * (residual_t @ residual_t.T + self.H_t @ self.P_t @ self.H_t.T)
+    
         # Ma trận hiệp phương sai của Innovation
-        S_t = self.H_t @ self.P_t @ self.H_t.T + self.R_t
+        self.S_t = self.H_t @ self.P_t @ self.H_t.T + self.R_t
 
         # Tính Kalman Gain
-        K_t = self.P_t @ self.H_t.T @ np.linalg.inv(S_t)
-
+        self.K_t = self.P_t @ self.H_t.T @ np.linalg.inv(self.S_t)
+        #print(f'K:    {K_t}')
+        # print(f'truoc K: {self.x_t[3]}')
         # Cập nhật trạng thái
-        self.x_t = self.x_t + K_t @ d_t
-        self.P_t = (np.eye(4) - K_t @ self.H_t) @ self.P_t
+        self.x_t = self.x_t + self.K_t @ d_t
+        # print(f'sau K: {self.x_t[3]}')
+        self.P_t = (np.eye(4) - self.K_t @ self.H_t) @ self.P_t 
+        self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
+        # Cập nhật động ma trận nhiễu quá trình Q_t
+
 
     def get_state(self):
         """ Trả về trạng thái hiện tại """
         return self.x_t
 
 # Khởi tạo EKF với ma trận Q và R cố định
-dt = 0.1
-Q_fixed = [1e-3, 1e-3, 3e-4, 2e-3]  # Ma trận nhiễu quá trình cố định
-R_fixed = [0.5, 0.5, 1]  # Ma trận nhiễu đo lường cố định
+dt = 0.01
 
-ekf = EKF(dt, Q_fixed, R_fixed)
+# alpha_Q = 1.3  # Hệ số quên cho nhiễu quá trình
+# alpha_R = 1 # Hệ số quên cho nhiễu đo lường
+# Q_init = [0.01, 0.01, 0.005, 0.01]  # Ma trận nhiễu quá trình cố định
+# R_init = [0.07, 0.07, 0.01]  # Ma trận nhiễu đo lường
 
+alpha_Q = 0.993  # Hệ số quên cho nhiễu quá trình
+alpha_R = 1 # Hệ số quên cho nhiễu đo lường
+Q_init = [0.2, 0.2, 0.1, 0.02]
+R_init = [0.005, 0.005, 0.001]  # Ma trận nhiễu đo lường cố định
+
+# alpha_Q = 0.98  # Hệ số quên cho nhiễu quá trình
+# alpha_R = 1 # Hệ số quên cho nhiễu đo lường
+# Q_init = [0.01, 0.01, 0.005, 0.01]  # Ma trận nhiễu quá trình cố định
+# R_init = [0.2, 0.1, 0.02]  # Ma trận nhiễu đo lường
+# Q_init = [0.01, 0.01, 0.005, 0.01] # Ma trận nhiễu quá trình cố định
+# R_init = [0.1, 0.1, 0.02]
+
+ekf = EKF(dt, alpha_Q, alpha_R, Q_init, R_init)
 try:
     # Initialize ROS node
     rospy.init_node('pose_estimation_publisher', anonymous=True)
 
     # ROS publisher for the /odom topic
     pose_pub = rospy.Publisher('/expected_pose', Float32MultiArray, queue_size=10)
+
+    def uart_callback(msg):
+        global v, imu_yaw, yaw
+        if len(msg.data) >= 2:
+            v = msg.data[0]
+            imu_yaw = msg.data[1]
+            yaw = msg.data[2]
+            # rospy.loginfo(f"Received from UART: v = {v}, yaw_dot = {yaw_dot}")
+        else:
+            rospy.logwarn("UART callback received invalid data!")
+
+    rospy.Subscriber('/measured_vel', Float32MultiArray, uart_callback)
+    
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", PORT))        
@@ -108,10 +173,9 @@ try:
 
     while not rospy.is_shutdown():
         # Nhập dữ liệu từ cảm biến
-        theta_dot = 2  
-        v = 0.01
+        print(f"Received: V={v}, yaw={yaw}")
         try:
-            data, _ = sock.recvfrom(1024)
+            data, _ = sock.recvfrom(2048)
             x, y, phi = map(float, data.decode().split(","))
 
             print(f"Received: x={x}, y={y}, phi={phi}")
@@ -122,10 +186,17 @@ try:
         # Nhập dữ liệu đo lường từ Camera + ArUco Marker
         x_meas = x
         y_meas = y
-        phi_meas = phi * 3.14 /180  
 
-        # Vector điều khiển và đo lường
-        u_t = np.array([[theta_dot], [v]])
+        imu_yaw = np.abs(imu_yaw)
+        if (phi < 0):
+            imu_yaw = -imu_yaw
+        print(f"imu_yaw: {imu_yaw}")
+        print(f"phi:     {phi}")
+        phi_meas = (0.4*phi + 0.6*imu_yaw)  
+
+        # Vector điều khiển và đo lườn  g
+        u_t = np.array([v , yaw])
+        phi_meas = np.arctan2(np.sin(phi_meas), np.cos(phi_meas))
         z_t = np.array([[x_meas], [y_meas], [phi_meas]])
 
         # Bước dự đoán và cập nhật
@@ -134,20 +205,29 @@ try:
 
         # Lấy trạng thái ước lượng hiện tại
         state = ekf.get_state().flatten()
-        print(f"Trạng thái ước lượng: x = {state[0]:.2f}, y = {state[1]:.2f}, phi = {state[2]:.2f}, v = {state[3]:.2f}")
-    
+        pre_v = v
+        print(f"Trạng thái ước lượng: x = {state[0]:.7f}, y = {state[1]:.7f}, phi = {state[2]:.7f}, v = {state[3]:.7f}")
+        
+        # state[0] = x_meas = x
+        # state[1] = y_meas 
+        # state[2] = phi_meas 
         # Store values in the pose dictionary
         pose = {}
         pose['x'] = state[0]
         pose['y'] = state[1]
         pose['phi'] = state[2]
-        pose['v'] = state[3]
-        position = (float(pose['x']), float(pose['y']), float(pose['phi']) ,float(pose['v']))
-        time.sleep(0.5)
 
+        pose['v'] = state[3]
+        pose['pose_x'] = x_meas
+        pose['pose_y'] = y_meas
+        pose['pose_phi'] = phi_meas
+        position = (float(pose['x']), float(pose['y']), float(pose['phi']) ,float(pose['v']),float(pose['pose_x']),float(pose['pose_y']))
+        # time.sleep(0.01)
         # Publish the position and yaw angle
         publish_pose(pose)
-        rospy.loginfo(pose)
+
+   
+        # rospy.loginfo(pose)
 
 except rospy.ROSInterruptException:
     pass

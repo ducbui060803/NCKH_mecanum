@@ -11,6 +11,7 @@ v = 0
 pre_v = 0
 acc_prev = 0
 yaw = 0
+imu_yaw = 0
 PORT = 5005
 
 def publish_pose(pose):
@@ -125,9 +126,10 @@ try:
     pose_pub = rospy.Publisher('/expected_pose', Float32MultiArray, queue_size=10)
 
     def uart_callback(msg):
-        global v, yaw
+        global v, imu_yaw, yaw
         if len(msg.data) >= 2:
             v = msg.data[0]
+            imu_yaw = msg.data[1]
             yaw = msg.data[2]
             # rospy.loginfo(f"Received from UART: v = {v}, yaw_dot = {yaw_dot}")
         else:
@@ -161,7 +163,12 @@ try:
         # Nhập dữ liệu đo lường từ Camera + ArUco Marker
         x_meas = x
         y_meas = y
-        phi_meas = phi  
+        imu_yaw = np.abs(imu_yaw)
+        if (phi < 0):
+            imu_yaw = -imu_yaw
+        print(f"imu_yaw: {imu_yaw}")
+        print(f"phi:     {phi}")
+        phi_meas = (0.4*phi + 0.6*imu_yaw)  
 
         # Vector điều khiển và đo lườn  g
         u_t = np.array([v , yaw])

@@ -12,6 +12,7 @@ v = 0
 pre_v = 0
 acc_prev = 0
 yaw = 0
+imu_yaw = 0
 PORT = 5005
 
 def publish_pose(pose):
@@ -49,6 +50,12 @@ class EKF:
             [0, 0, 1, 0]   # Phi đo từ camera
         ])
         self.chi2_threshold = chi2_threshold  # Ngưỡng kiểm tra χ²
+
+    def cmd_vel_callback(self, msg):
+        vx = msg.linear.x
+        vy = msg.linear.y
+        omega = msg.angular.z
+
     def predict(self, u_t):
         global pre_v
         global acc_prev
@@ -127,7 +134,7 @@ dt = 0.01
 # Q_fixed = [0.1, 0.1, 0.05, 0.01]  # Ma trận nhiễu quá trình cố định
 Q_fixed = [0.2, 0.2, 0.1, 0.02]
 R_fixed = [0.005, 0.005, 0.001]  # Ma trận nhiễu đo lường cố định
-chi2_threshold = 0.025 # Ngưỡng kiểm tra χ² (càng lớn thì càng dễ chấp nhận đo lường lệch nhiều) 
+chi2_threshold = 0.03 # Ngưỡng kiểm tra χ² (càng lớn thì càng dễ chấp nhận đo lường lệch nhiều) 
 chi2_history = []  # Danh sách lưu giá trị chi-squared theo thời gian
 
 ekf = EKF(dt, Q_fixed, R_fixed)
@@ -149,9 +156,10 @@ try:
     pose_pub = rospy.Publisher('/expected_pose', Float32MultiArray, queue_size=10)
 
     def uart_callback(msg):
-        global v, yaw
+        global v, imu_yaw,yaw
         if len(msg.data) >= 2:
             v = msg.data[0]
+            imu_yaw = msg.data[1]
             yaw = msg.data[2]
             # rospy.loginfo(f"Received from UART: v = {v}, yaw_dot = {yaw_dot}")
         else:
@@ -185,9 +193,15 @@ try:
         # Nhập dữ liệu đo lường từ Camera + ArUco Marker
         x_meas = x
         y_meas = y
-        phi_meas = phi  
+        
+        imu_yaw = np.abs(imu_yaw)
+        if (phi < 0):
+            imu_yaw = -imu_yaw
+        print(f"imu_yaw: {imu_yaw}")
+        print(f"phi:     {phi}")
+        phi_meas = (0.4*phi + 0.6*imu_yaw)
 
-        # Vector điều khiển và đo lườn  g
+        # Vector điều khiển và đo lườn  gq
         u_t = np.array([v , yaw])
         phi_meas = np.arctan2(np.sin(phi_meas), np.cos(phi_meas))
         z_t = np.array([[x_meas], [y_meas], [phi_meas]])
@@ -234,6 +248,6 @@ finally:
     plt.ylabel('Chi-squared value')
     plt.title('Chi-squared over time')
     plt.legend()
-    plt.grid()
+    plt.grid(False)
     plt.show()
 
