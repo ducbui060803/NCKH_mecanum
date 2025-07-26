@@ -9,10 +9,6 @@ RM := rm -rf
 
 # All of the sources participating in the build are defined here
 -include sources.mk
--include USB_HOST/Target/subdir.mk
--include USB_HOST/App/subdir.mk
--include Middlewares/ST/STM32_USB_Host_Library/Core/Src/subdir.mk
--include Middlewares/ST/STM32_USB_Host_Library/Class/CDC/Src/subdir.mk
 -include Drivers/STM32F4xx_HAL_Driver/Src/subdir.mk
 -include Core/Startup/subdir.mk
 -include Core/Src/subdir.mk
@@ -64,8 +60,8 @@ all: main-build
 main-build: Motor_control_stm.elf secondary-outputs
 
 # Tool invocations
-Motor_control_stm.elf Motor_control_stm.map: $(OBJS) $(USER_OBJS) C:\HK_242\Luan_Van_Solo\Local_repo\stm_code\Motor_control_stm\STM32F411VETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Motor_control_stm.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\HK_242\Luan_Van_Solo\Local_repo\stm_code\Motor_control_stm\STM32F411VETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Motor_control_stm.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Motor_control_stm.elf Motor_control_stm.map: $(OBJS) $(USER_OBJS) C:\Cong_viec\Learning\Luan_Van_Solo\Repo_thesis\NCKH_mecanum\stm_code\Motor_control_stm\STM32F411VETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Motor_control_stm.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Cong_viec\Learning\Luan_Van_Solo\Repo_thesis\NCKH_mecanum\stm_code\Motor_control_stm\STM32F411VETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Motor_control_stm.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
