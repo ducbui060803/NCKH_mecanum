@@ -36,7 +36,7 @@
 /* USER CODE BEGIN PD */
 #define PWM_FAST 					600
 #define PWM_SLOW 					300
-#define PPR 	 					1000       // Pulses per revolution
+#define PPR 	 					240        // Pulses per revolution
 #define DT 		 					0.01f      // 10ms (chu kỳ gọi hàm đo)
 #define BNO055_ADDRESS 				0x28 << 1  // Shifted 7-bit to 8-bit I2C address
 #define BNO055_EULER_H_LSB 			0x1A
@@ -48,6 +48,7 @@
 #define L2 							0.1 	// Khoảng cách từ trục OpXp đến bánh xe
 #define r 							0.035   // Bán kính bánh xe
 #define MAX_SPEED 					100
+#define PWM_MAX 					300
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -72,6 +73,17 @@ DMA_HandleTypeDef hdma_usart6_rx;
 DMA_HandleTypeDef hdma_usart6_tx;
 
 /* USER CODE BEGIN PV */
+// GPIO chân điều khiển chiều quay (IN1 & IN2)
+GPIO_TypeDef* in1_port[4] = { GPIOA, GPIOD, GPIOE, GPIOC };
+uint16_t in1_pin[4]       = { GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_3, GPIO_PIN_0 };
+
+GPIO_TypeDef* in2_port[4] = { GPIOC, GPIOD, GPIOB, GPIOC };
+uint16_t in2_pin[4]       = { GPIO_PIN_11, GPIO_PIN_6, GPIO_PIN_9, GPIO_PIN_2 };
+
+// PWM kênh và timer
+TIM_HandleTypeDef* htim_pwm[4] = { &htim5, &htim5, &htim9, &htim10 };
+uint32_t tim_channel[4]        = { TIM_CHANNEL_3, TIM_CHANNEL_4, TIM_CHANNEL_2, TIM_CHANNEL_1 };
+
 UART_HandleTypeDef huart6;
 char rx_data;                  		// ký tự nhận được tạm thời
 char temp_line[100];
@@ -124,6 +136,7 @@ void update_encoder_speed(void);
 void read_IMU(void);
 void parse_uart_line(char *line);
 void move(float vx, float vy, float omega);
+void driveMotor(int idx, float speed);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -330,6 +343,31 @@ void move(float vx, float vy, float omega)
     Setpoint[1] = v2 * MAX_SPEED;
     Setpoint[2] = v3 * MAX_SPEED;
     Setpoint[3] = v4 * MAX_SPEED;
+
+    driveMotor(0, Setpoint[0] / MAX_SPEED);  // Normalized từ -1.0 đến 1.0
+    driveMotor(1, Setpoint[1] / MAX_SPEED);
+    driveMotor(2, Setpoint[2] / MAX_SPEED);
+    driveMotor(3, Setpoint[3] / MAX_SPEED);
+}
+
+void driveMotor(int idx, float speed)
+{
+    if (idx < 0 || idx >= 4) return;
+
+    uint8_t forward = (speed >= 0);
+    float abs_speed = fabsf(speed);
+
+    if (abs_speed > 1.0f) abs_speed = 1.0f;  // Giới hạn từ -1.0 đến 1.0
+
+    // Tính giá trị PWM theo PWM_MAX
+    uint32_t pwm_value = (uint32_t)(abs_speed * PWM_MAX);
+
+    // Điều khiển chiều
+    HAL_GPIO_WritePin(in1_port[idx], in1_pin[idx], forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(in2_port[idx], in2_pin[idx], forward ? GPIO_PIN_RESET : GPIO_PIN_SET);
+
+    // Xuất PWM
+    __HAL_TIM_SET_COMPARE(htim_pwm[idx], tim_channel[idx], pwm_value);
 }
 /* USER CODE END 0 */
 
@@ -374,7 +412,7 @@ int main(void)
   MX_TIM10_Init();
   MX_TIM11_Init();
   /* USER CODE BEGIN 2 */
-  user_init();
+//  user_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
