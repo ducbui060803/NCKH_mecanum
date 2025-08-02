@@ -49,6 +49,7 @@
 #define r 							0.035   // Bán kính bánh xe
 #define MAX_SPEED 					100
 #define PWM_MAX 					300
+#define MANUAL_TIMEOUT 				3000  // 3s timeout
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -94,6 +95,8 @@ uint8_t started 		= 0;
 uint8_t uart_tx_ready 	= 0;
 uint8_t temp_line_index = 0;
 uint8_t send_flag 		= 0;
+uint8_t manual_mode = 0;
+uint32_t last_manual_time = 0;
 int16_t encoder_current[4];
 int16_t encoder_past[4];
 int16_t delta_encoder[4];
@@ -321,6 +324,9 @@ void parse_uart_line(char *line)
         started = 1;
         move(vx, vy, omega);
     }
+
+    manual_mode = 1;
+    last_manual_time = HAL_GetTick();
 }
 
 void move(float vx, float vy, float omega)
@@ -425,12 +431,18 @@ int main(void)
     /* USER CODE BEGIN 3 */
     check_uart_command();
 
+    if (manual_mode && HAL_GetTick() - last_manual_time > MANUAL_TIMEOUT)
+    {
+        manual_mode = 0;
+        move(0, 0, 0);  // Dừng robot nếu timeout
+    }
+
     if (send_flag && uart_tx_ready)
     {
         send_flag = 0;
         uart_tx_ready = 0;
 
-//        snprintf(tx_buffer, sizeof(tx_buffer), "%.3f %.3f %.3f\n", V_send, yaw_send, theta_dot_send);
+        snprintf(tx_buffer, sizeof(tx_buffer), "%.3f %.3f %.3f\n", V_send, yaw_send, theta_dot_send);
         HAL_UART_Transmit_DMA(&huart6, (uint8_t *)tx_buffer, strlen(tx_buffer));
     }
   }
