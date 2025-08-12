@@ -39,7 +39,6 @@ from collections import deque
 import numpy as np
 import cv2
 
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox
 from PySide6 import QtCore, QtWidgets, QtGui
 import pyqtgraph as pg
 from pyqtgraph import PlotWidget
@@ -120,19 +119,19 @@ class PoseThread(QtCore.QThread):
 
     def run(self):
         self._running = True
-        if self.use_ros and HAVE_ROS:
-            rospy.Subscriber(self.pose_topic, PoseStamped, self._ros_cb)
-            rospy.spin()
-        else:
-            # Fake pose generator for demo
-            t0 = time.time()
-            while self._running:
-                t = time.time() - t0
-                x = 0.5 * math.cos(0.6 * t)
-                y = 0.5 * math.sin(0.4 * t)
-                yaw = math.atan2(y, x)
-                self.pose_ready.emit(x, y, yaw)
-                time.sleep(0.05)
+        # if self.use_ros and HAVE_ROS:
+        #     rospy.Subscriber(self.pose_topic, PoseStamped, self._ros_cb)
+        #     rospy.spin()
+        # else:
+        # Fake pose generator for demo
+        t0 = time.time()
+        while self._running:
+            t = time.time() - t0
+            x = 0.5 * math.cos(0.6 * t)
+            y = 0.5 * math.sin(0.4 * t)
+            yaw = math.atan2(y, x)
+            self.pose_ready.emit(x, y, yaw)
+            time.sleep(0.05)
 
     def _ros_cb(self, msg):
         if not self._running:
@@ -160,6 +159,7 @@ class MecanumUI(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle('Mecanum Control UI')
         self.resize(1200, 800)
+        self.setStyleSheet("background-color: white; color: black;")
 
         self.use_ros = use_ros
 
@@ -175,7 +175,7 @@ class MecanumUI(QtWidgets.QMainWindow):
         # Video display using QLabel + QImage
         self.video_label = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
         self.video_label.setMinimumSize(480, 360)
-        self.video_label.setStyleSheet('background: #000;')
+        self.video_label.setStyleSheet("color: white; background: black;")
         left_vbox.addWidget(self.video_label)
 
         # Controls: trajectory selector and start/stop
@@ -183,16 +183,17 @@ class MecanumUI(QtWidgets.QMainWindow):
         left_vbox.addLayout(ctrl_h)
 
         self.traj_combo = QtWidgets.QComboBox()
-        self.traj_combo.addItems(['Circle', 'Line X', 'Line Y', 'Figure-8'])
+        self.traj_combo.addItems(["Circle", "Square", "Line", "Figure-8"])
         ctrl_h.addWidget(QtWidgets.QLabel('Trajectory:'))
         ctrl_h.addWidget(self.traj_combo)
 
         self.start_btn = QtWidgets.QPushButton('Start')
         self.stop_btn = QtWidgets.QPushButton('Stop')
-        ctrl_h.addWidget(self.start_btn)
-        ctrl_h.addWidget(self.stop_btn)
-
-        # Numeric displays for x,y,yaw and errors
+        for btn in (self.start_btn, self.stop_btn):
+            btn.setStyleSheet("color: black; background-color: #f0f0f0;")
+            ctrl_h.addWidget(btn)
+            
+        # Numeric displays for x, y, yaw and errors
         grid = QtWidgets.QGridLayout()
         left_vbox.addLayout(grid)
         labels = ['x (m)', 'y (m)', 'phi (deg)', 'err_x (m)', 'err_y (m)', 'err_phi (deg)']
@@ -210,25 +211,25 @@ class MecanumUI(QtWidgets.QMainWindow):
         right_vbox = QtWidgets.QVBoxLayout()
         layout.addLayout(right_vbox, 3)
 
-        # pyqtgraph plot for trajectories
+        pg.setConfigOption('background', 'w')
+        pg.setConfigOption('foreground', 'k')
         self.pw = pg.PlotWidget(title='Trajectory (XY)')
         self.pw.setLabel('left', 'Y (m)')
         self.pw.setLabel('bottom', 'X (m)')
         self.pw.addLegend(offset=(10,10))
         right_vbox.addWidget(self.pw, 3)
 
-        self.ref_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, style=QtCore.Qt.DashLine), name='Reference')
-        self.actual_curve = self.pw.plot([], [], pen=pg.mkPen(width=2), name='Actual')
+        self.ref_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, style=QtCore.Qt.DashLine, color='b'), name='Reference')
+        self.actual_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, color='r'), name='Actual')
 
         # small plots for errors over time
         self.err_plot = pg.PlotWidget(title='Errors over time')
         self.err_plot.addLegend()
         right_vbox.addWidget(self.err_plot, 1)
-        self.err_x_curve = self.err_plot.plot([], [], name='err_x')
-        self.err_y_curve = self.err_plot.plot([], [], name='err_y')
-        self.err_phi_curve = self.err_plot.plot([], [], name='err_phi')
+        self.err_x_curve = self.err_plot.plot([], [], name='err_x', pen=pg.mkPen(color='r'))
+        self.err_y_curve = self.err_plot.plot([], [], name='err_y', pen=pg.mkPen(color='g'))
+        self.err_phi_curve = self.err_plot.plot([], [], name='err_phi', pen=pg.mkPen(color='b'))
 
-        # status bar
         self.status = QtWidgets.QStatusBar()
         self.setStatusBar(self.status)
 
@@ -302,7 +303,9 @@ class MecanumUI(QtWidgets.QMainWindow):
         xs = x.tolist()
         ys = y.tolist()
         self.ref_curve.setData(xs, ys)
-
+        self.pw.enableAutoRange()  # Reset zoom XY
+        self.err_plot.enableAutoRange()  # Reset zoom Error plot
+        
     def on_frame(self, frame_rgb):
         # frame_rgb is HxWx3
         h, w, ch = frame_rgb.shape
