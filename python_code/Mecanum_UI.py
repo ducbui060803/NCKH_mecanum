@@ -38,7 +38,7 @@ from collections import deque
 
 import numpy as np
 import cv2
-
+import matplotlib.pyplot as plt
 from PySide6 import QtCore, QtWidgets, QtGui
 import pyqtgraph as pg
 from pyqtgraph import PlotWidget
@@ -160,28 +160,24 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.setWindowTitle('Mecanum Control UI')
         self.resize(1200, 800)
         self.setStyleSheet("background-color: white; color: black;")
-
         self.use_ros = use_ros
 
-        # central widget and layout
+        # central layout
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         layout = QtWidgets.QHBoxLayout(central)
 
-        # Left: video and controls
+        # Left: video + controls
         left_vbox = QtWidgets.QVBoxLayout()
         layout.addLayout(left_vbox, 2)
 
-        # Video display using QLabel + QImage
         self.video_label = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
         self.video_label.setMinimumSize(480, 360)
         self.video_label.setStyleSheet("color: white; background: black;")
         left_vbox.addWidget(self.video_label)
 
-        # Controls: trajectory selector and start/stop
         ctrl_h = QtWidgets.QHBoxLayout()
         left_vbox.addLayout(ctrl_h)
-
         self.traj_combo = QtWidgets.QComboBox()
         self.traj_combo.addItems(["Circle", "Square", "Line", "Figure-8"])
         ctrl_h.addWidget(QtWidgets.QLabel('Trajectory:'))
@@ -192,8 +188,8 @@ class MecanumUI(QtWidgets.QMainWindow):
         for btn in (self.start_btn, self.stop_btn):
             btn.setStyleSheet("color: black; background-color: #f0f0f0;")
             ctrl_h.addWidget(btn)
-            
-        # Numeric displays for x, y, yaw and errors
+
+        # Numeric displays
         grid = QtWidgets.QGridLayout()
         left_vbox.addLayout(grid)
         labels = ['x (m)', 'y (m)', 'phi (deg)', 'err_x (m)', 'err_y (m)', 'err_phi (deg)']
@@ -207,7 +203,7 @@ class MecanumUI(QtWidgets.QMainWindow):
             grid.addWidget(val, i//3, (i%3)*2+1)
             self.value_displays[name] = val
 
-        # Right: plotting area
+        # Right: plots
         right_vbox = QtWidgets.QVBoxLayout()
         layout.addLayout(right_vbox, 3)
 
@@ -222,7 +218,6 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.ref_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, style=QtCore.Qt.DashLine, color='b'), name='Reference')
         self.actual_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, color='r'), name='Actual')
 
-        # small plots for errors over time
         self.err_plot = pg.PlotWidget(title='Errors over time')
         self.err_plot.addLegend()
         right_vbox.addWidget(self.err_plot, 1)
@@ -233,8 +228,8 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.status = QtWidgets.QStatusBar()
         self.setStatusBar(self.status)
 
-        # Data buffers
-        self.ref_traj = []  # list of (x,y)
+        # Buffers real-time
+        self.ref_traj = []
         self.actual_traj = deque(maxlen=2000)
         self.err_time = deque(maxlen=1000)
         self.err_x = deque(maxlen=1000)
@@ -242,98 +237,112 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.err_phi = deque(maxlen=1000)
         self.start_time = None
 
-        # Camera + Pose threads
-        self.cam_thread = CameraThread(source=camera_source, use_ros=self.use_ros)
-        self.cam_thread.frame_ready.connect(self.on_frame)
-        self.pose_thread = PoseThread(use_ros=self.use_ros)
-        self.pose_thread.pose_ready.connect(self.on_pose)
+        # Buffers offline (Matplotlib)
+        self.time_list = []
+        self.x_list = []
+        self.y_list = []
+        self.yaw_list = []
+        self.u1_list = []
+        self.u2_list = []
+        self.u3_list = []
+        self.vx_list = []
+        self.vy_list = []
+        self.omega_list = []
 
-        # signals
+        # Camera/Pose thread
+        # self.cam_thread = CameraThread(source=camera_source, use_ros=self.use_ros)
+        # self.cam_thread.frame_ready.connect(self.on_frame)
+        # self.pose_thread = PoseThread(use_ros=self.use_ros)
+        # self.pose_thread.pose_ready.connect(self.on_pose)
+
+        # Signals
         self.start_btn.clicked.connect(self.on_start)
         self.stop_btn.clicked.connect(self.on_stop)
         self.traj_combo.currentIndexChanged.connect(self.on_traj_change)
 
-        # initial trajectory
         self.on_traj_change(0)
 
-        # timer for updating plots
         self.ui_timer = QtCore.QTimer()
         self.ui_timer.timeout.connect(self.update_plots)
         self.ui_timer.start(100)
 
-        # internal state
         self.latest_pose = (0.0, 0.0, 0.0)
 
-    # ---------- UI callbacks ----------
     def on_start(self):
         self.status.showMessage('Starting...')
         self.start_time = time.time()
-        if not self.cam_thread.isRunning():
-            self.cam_thread.start()
-        if not self.pose_thread.isRunning():
-            self.pose_thread.start()
+        # if not self.cam_thread.isRunning():
+        #     self.cam_thread.start()
+        # if not self.pose_thread.isRunning():
+        #     self.pose_thread.start()
         self.status.showMessage('Running')
 
     def on_stop(self):
         self.status.showMessage('Stopping...')
-        self.cam_thread.stop()
-        self.pose_thread.stop()
+        # self.cam_thread.stop()
+        # self.pose_thread.stop()
         self.status.showMessage('Stopped')
+        self.plot_matplotlib()
 
     def on_traj_change(self, idx):
-        # build reference trajectory - simple parametrized curves for demo
         t = np.linspace(0, 20, 400)
-        if idx == 0:  # Circle
+        if idx == 0:
             x = 0.6 * np.cos(0.6 * t)
             y = 0.6 * np.sin(0.6 * t)
-        elif idx == 1:  # Line X
+        elif idx == 1:
             x = 0.05 * t - 0.5
             y = np.zeros_like(t)
-        elif idx == 2:  # Line Y
+        elif idx == 2:
             x = np.zeros_like(t)
             y = 0.05 * t - 0.5
-        elif idx == 3:  # Figure-8
+        elif idx == 3:
             x = 0.6 * np.sin(0.6 * t)
             y = 0.4 * np.sin(1.2 * t)
         else:
             x = np.zeros_like(t)
             y = np.zeros_like(t)
         self.ref_traj = list(zip(x, y))
-        # plot static ref immediately
-        xs = x.tolist()
-        ys = y.tolist()
-        self.ref_curve.setData(xs, ys)
-        self.pw.enableAutoRange()  # Reset zoom XY
-        self.err_plot.enableAutoRange()  # Reset zoom Error plot
-        
+        self.ref_curve.setData(x.tolist(), y.tolist())
+        self.pw.enableAutoRange()
+        self.err_plot.enableAutoRange()
+
     def on_frame(self, frame_rgb):
-        # frame_rgb is HxWx3
         h, w, ch = frame_rgb.shape
         bytes_per_line = ch * w
         image = QtGui.QImage(frame_rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
         pix = QtGui.QPixmap.fromImage(image).scaled(self.video_label.size(), QtCore.Qt.KeepAspectRatio)
         self.video_label.setPixmap(pix)
 
-    def on_pose(self, x, y, yaw):
-        # receive robot pose (meters, radians) - update numeric displays and buffers
+    def on_pose(self, x, y, yaw, u1=0, u2=0, u3=0, vx=0, vy=0, omega=0):
         self.latest_pose = (x, y, yaw)
-        # append actual trajectory
         self.actual_traj.append((x, y))
-        # compute nearest reference point (simple nearest neighbor)
+
         if len(self.ref_traj) > 0:
             ref_x, ref_y = min(self.ref_traj, key=lambda p: (p[0]-x)**2 + (p[1]-y)**2)
         else:
             ref_x, ref_y = x, y
         err_x = ref_x - x
         err_y = ref_y - y
-        err_phi = (0.0 - yaw)  # For demo assume reference yaw = 0. Adjust as needed.
-        # keep errors
+        err_phi = (0.0 - yaw)
+
         stamp = time.time() - (self.start_time or time.time())
         self.err_time.append(stamp)
         self.err_x.append(err_x)
         self.err_y.append(err_y)
         self.err_phi.append(math.degrees(err_phi))
-        # update numeric displays
+
+        # Save offline data
+        self.time_list.append(stamp)
+        self.x_list.append(x)
+        self.y_list.append(y)
+        self.yaw_list.append(math.degrees(yaw))
+        self.u1_list.append(u1)
+        self.u2_list.append(u2)
+        self.u3_list.append(u3)
+        self.vx_list.append(vx)
+        self.vy_list.append(vy)
+        self.omega_list.append(omega)
+
         self.value_displays['x (m)'].setText(f"{x:.3f}")
         self.value_displays['y (m)'].setText(f"{y:.3f}")
         self.value_displays['phi (deg)'].setText(f"{math.degrees(yaw):.2f}")
@@ -342,15 +351,66 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.value_displays['err_phi (deg)'].setText(f"{math.degrees(err_phi):.2f}")
 
     def update_plots(self):
-        # update actual trajectory plot
         if len(self.actual_traj) > 0:
             xs, ys = zip(*self.actual_traj)
             self.actual_curve.setData(xs, ys)
-        # update error plots
         if len(self.err_time) > 0:
             self.err_x_curve.setData(list(self.err_time), list(self.err_x))
             self.err_y_curve.setData(list(self.err_time), list(self.err_y))
             self.err_phi_curve.setData(list(self.err_time), list(self.err_phi))
+
+    def plot_matplotlib(self):
+        # 1. Quỹ đạo XY
+        plt.figure()
+        plt.plot(self.x_list, self.y_list, 'r', label='Actual')
+        ref_xs, ref_ys = zip(*self.ref_traj)
+        plt.plot(ref_xs, ref_ys, 'b--', label='Reference')
+        plt.xlabel('X (m)')
+        plt.ylabel('Y (m)')
+        plt.legend()
+        plt.title('Trajectory XY')
+
+        # 2. Sai số
+        plt.figure()
+        plt.plot(self.time_list, self.err_x, 'r', label='err_x')
+        plt.plot(self.time_list, self.err_y, 'g', label='err_y')
+        plt.plot(self.time_list, self.err_phi, 'b', label='err_phi')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Error')
+        plt.legend()
+        plt.title('Errors over time')
+
+        # 3. X, Y, yaw
+        plt.figure()
+        plt.plot(self.time_list, self.x_list, label='x')
+        plt.plot(self.time_list, self.y_list, label='y')
+        plt.plot(self.time_list, self.yaw_list, label='yaw (deg)')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Pose')
+        plt.legend()
+        plt.title('Pose over time')
+
+        # 4. U1, U2, U3
+        plt.figure()
+        plt.plot(self.time_list, self.u1_list, label='u1')
+        plt.plot(self.time_list, self.u2_list, label='u2')
+        plt.plot(self.time_list, self.u3_list, label='u3')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Control signal')
+        plt.legend()
+        plt.title('Control signals')
+
+        # 5. Vx, Vy, Omega
+        plt.figure()
+        plt.plot(self.time_list, self.vx_list, label='vx')
+        plt.plot(self.time_list, self.vy_list, label='vy')
+        plt.plot(self.time_list, self.omega_list, label='omega')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Velocity')
+        plt.legend()
+        plt.title('Velocities over time')
+
+        plt.show()
 
     def closeEvent(self, event):
         try:
