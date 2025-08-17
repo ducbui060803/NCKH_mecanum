@@ -50,6 +50,8 @@
 #define MAX_SPEED 					100
 #define PWM_MAX 					300
 #define MANUAL_TIMEOUT 				3000  // 3s timeout
+#define TRUE						1
+#define FALSE						0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -74,18 +76,25 @@ DMA_HandleTypeDef hdma_usart6_rx;
 DMA_HandleTypeDef hdma_usart6_tx;
 
 /* USER CODE BEGIN PV */
+
 // GPIO chân điều khiển chiều quay (IN1 & IN2)
-GPIO_TypeDef* in1_port[4] = { GPIOA, GPIOD, GPIOE, GPIOC };
-uint16_t in1_pin[4]       = { GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_3, GPIO_PIN_0 };
+//GPIO_TypeDef* in1_port[4] = { GPIOA, GPIOD, GPIOB, GPIOC };
+//uint16_t in1_pin[4]       = { GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_9, GPIO_PIN_2 };
+//
+//GPIO_TypeDef* in2_port[4] = { GPIOC, GPIOD, GPIOE, GPIOC };
+//uint16_t in2_pin[4]       = { GPIO_PIN_11, GPIO_PIN_6, GPIO_PIN_3, GPIO_PIN_0 };
+GPIO_TypeDef* in1_port[4] = { GPIOD, GPIOA, GPIOC, GPIOE };
+uint16_t in1_pin[4]       = { GPIO_PIN_6, GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_3 };
 
-GPIO_TypeDef* in2_port[4] = { GPIOC, GPIOD, GPIOB, GPIOC };
-uint16_t in2_pin[4]       = { GPIO_PIN_11, GPIO_PIN_6, GPIO_PIN_9, GPIO_PIN_2 };
-
+GPIO_TypeDef* in2_port[4] = { GPIOD, GPIOC, GPIOC, GPIOB };
+uint16_t in2_pin[4]       = { GPIO_PIN_2, GPIO_PIN_11, GPIO_PIN_0, GPIO_PIN_9 };
 // PWM kênh và timer
-TIM_HandleTypeDef* htim_pwm[4] = { &htim5, &htim5, &htim9, &htim10 };
-uint32_t tim_channel[4]        = { TIM_CHANNEL_3, TIM_CHANNEL_4, TIM_CHANNEL_2, TIM_CHANNEL_1 };
-
+TIM_HandleTypeDef* htim_pwm[4] = { &htim5, &htim9, &htim10, &htim5 };
+uint32_t tim_channel[4]        = { TIM_CHANNEL_3, TIM_CHANNEL_2, TIM_CHANNEL_1, TIM_CHANNEL_4 };
 UART_HandleTypeDef huart6;
+/* NOTE: Swap M1 vs M2*/
+volatile uint8_t encoder_flag =  FALSE;
+volatile uint8_t imu_flag = FALSE;
 char rx_data;                  		// ký tự nhận được tạm thời
 char temp_line[100];
 uint8_t rx_buffer[RX_BUFFER_SIZE];  // Vòng đệm DMA nhận
@@ -150,8 +159,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM11)          // kiểm tra đúng timer
     {
         // Đặt code cần chạy mỗi chu kỳ ở đây
-        update_encoder_speed();
-        read_IMU();
+    	encoder_flag = TRUE;
+    	imu_flag = TRUE;
     }
 }
 
@@ -166,16 +175,20 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
 void user_init()
 {
-	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_3);
-	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4);
-	HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_2);
-	HAL_TIM_PWM_Start(&htim10, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_3); //M2
+	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4); //M3
+	HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_2); //M1
+	HAL_TIM_PWM_Start(&htim10, TIM_CHANNEL_1); //M4
 
-	HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
-	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+	HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL); //M1
+	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL); //M3
+	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL); //M4
+	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL); //M2
 
+	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 0);
+	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 0);
+	__HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_2, 0);
+	__HAL_TIM_SET_COMPARE(&htim10, TIM_CHANNEL_1, 0);
 	HAL_UART_Receive_DMA(&huart6, rx_buffer, RX_BUFFER_SIZE);
 	HAL_TIM_Base_Start_IT(&htim11);
 	// Set chiều quay THUẬN CHIỀU KIM ĐỒNG HỒ:
@@ -198,7 +211,7 @@ void user_init()
 	 // Reset BNO055
 	uint8_t reset_cmd = 0x20;
 	HAL_I2C_Mem_Write(&hi2c3, BNO055_ADDRESS, 0x3F, 1, &reset_cmd, 1, HAL_MAX_DELAY);
-	HAL_Delay(1000);  // Rất quan trọng!
+	HAL_Delay(3000);  // Rất quan trọng!
 
 	// Set to config mode
 	uint8_t config_mode = 0x00;
@@ -218,16 +231,16 @@ void update_encoder_speed(void)
 		switch (i)
 		{
 			case 0:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim1);
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim4); //M2
 				break;
 			case 1:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim2);
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim1); //M1
 				break;
 			case 2:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim3);
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim3); //M3
 				break;
 			case 3:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim4);
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim2); //M4
 				break;
 			default:
 				break;
@@ -383,84 +396,135 @@ void driveMotor(int idx, float speed)
   */
 int main(void)
 {
+	/* USER CODE BEGIN 1 */
 
-  /* USER CODE BEGIN 1 */
+	/* USER CODE END 1 */
 
-  /* USER CODE END 1 */
+	/* MCU Configuration--------------------------------------------------------*/
 
-  /* MCU Configuration--------------------------------------------------------*/
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+	/* USER CODE BEGIN Init */
 
-  /* USER CODE BEGIN Init */
+	/* USER CODE END Init */
 
-  /* USER CODE END Init */
+	/* Configure the system clock */
+	SystemClock_Config();
 
-  /* Configure the system clock */
-  SystemClock_Config();
+	/* USER CODE BEGIN SysInit */
 
-  /* USER CODE BEGIN SysInit */
+	/* USER CODE END SysInit */
 
-  /* USER CODE END SysInit */
+	/* Initialize all configured peripherals */
+	MX_GPIO_Init();
+	MX_DMA_Init();
+	MX_TIM1_Init();
+	MX_TIM2_Init();
+	MX_TIM3_Init();
+	MX_TIM4_Init();
+	MX_I2C3_Init();
+	MX_USART6_UART_Init();
+	MX_TIM5_Init();
+	MX_TIM9_Init();
+	MX_TIM10_Init();
+	MX_TIM11_Init();
+	/* USER CODE BEGIN 2 */
+	user_init();
+	/* USER CODE END 2 */
 
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_TIM1_Init();
-  MX_TIM2_Init();
-  MX_TIM3_Init();
-  MX_TIM4_Init();
-  MX_I2C3_Init();
-  MX_USART6_UART_Init();
-  MX_TIM5_Init();
-  MX_TIM9_Init();
-  MX_TIM10_Init();
-  MX_TIM11_Init();
-  /* USER CODE BEGIN 2 */
-  user_init();
-  /* USER CODE END 2 */
+	/* Infinite loop */
+	/* USER CODE BEGIN WHILE */
+	while (1)
+	{
+		/* USER CODE END WHILE */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+		/* USER CODE BEGIN 3 */
+		if (TRUE == encoder_flag)
+		{
+			update_encoder_speed();
+			encoder_flag = FALSE;
+		}
+		if (TRUE == imu_flag)
+		{
+			read_IMU();
+			imu_flag = FALSE;
+		}
 
-    /* USER CODE END WHILE */
+		check_uart_command();
 
-    /* USER CODE BEGIN 3 */
-//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 300);
-//	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
-//	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, GPIO_PIN_RESET);
+		if ((manual_mode) && (HAL_GetTick() - last_manual_time > MANUAL_TIMEOUT))
+		{
+			manual_mode = 0;
+			move(0, 0, 0);  // Dừng robot nếu timeout
+		}
+
+		if (send_flag && uart_tx_ready)
+		{
+			send_flag = 0;
+			uart_tx_ready = 0;
+
+			snprintf(tx_buffer, sizeof(tx_buffer), "%.3f %.3f %.3f\n", V_send, yaw_send, theta_dot_send);
+			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)tx_buffer, strlen(tx_buffer));
+		}
+
+//		// Forward
+//		driveMotor(0, 200);
+//		driveMotor(1, 200);
+//		driveMotor(2, 200);
+//		driveMotor(3, 200);
+//		HAL_Delay(3000);
 //
-//	HAL_Delay(2000);
-//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 0);
-//	HAL_Delay(2000);
-//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 300);
-//	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
-//	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_11, GPIO_PIN_SET);
+//		// Stop
+//		for (int i = 0; i < 4; i++)
+//		{
+//			driveMotor(i, 0);
+//		}
+//		HAL_Delay(3000);
 //
-//	HAL_Delay(2000);
-//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 0);
-//	HAL_Delay(2000);
-    check_uart_command();
-
-    if (manual_mode && HAL_GetTick() - last_manual_time > MANUAL_TIMEOUT)
-    {
-        manual_mode = 0;
-        move(0, 0, 0);  // Dừng robot nếu timeout
-    }
-
-    if (send_flag && uart_tx_ready)
-    {
-        send_flag = 0;
-        uart_tx_ready = 0;
-
-        snprintf(tx_buffer, sizeof(tx_buffer), "%.3f %.3f %.3f\n", V_send, yaw_send, theta_dot_send);
-        HAL_UART_Transmit_DMA(&huart6, (uint8_t *)tx_buffer, strlen(tx_buffer));
-    }
-  }
-  /* USER CODE END 3 */
+//		// Backward
+//		driveMotor(0, -200);
+//		driveMotor(1, -200);
+//		driveMotor(2, -200);
+//		driveMotor(3, -200);
+//		HAL_Delay(3000);
+//
+//		// Stop
+//		for (int i = 0; i < 4; i++)
+//		{
+//			driveMotor(i, 0);
+//		}
+//		HAL_Delay(3000);
+//
+//		// Left
+//		driveMotor(0, -200);
+//		driveMotor(1, 200);
+//		driveMotor(2, -200);
+//		driveMotor(3, 200);
+//		HAL_Delay(3000);
+//
+//		// Stop
+//		for (int i = 0; i < 4; i++)
+//		{
+//			driveMotor(i, 0);
+//		}
+//		HAL_Delay(3000);
+//
+//		// Right
+//		driveMotor(0, 200);
+//		driveMotor(1, -200);
+//		driveMotor(2, 200);
+//		driveMotor(3, -200);
+//		HAL_Delay(3000);
+//
+//		// Stop
+//		for (int i = 0; i < 4; i++)
+//		{
+//			driveMotor(i, 0);
+//		}
+//		HAL_Delay(3000);
+	}
+	/* USER CODE END 3 */
 }
 
 /**
