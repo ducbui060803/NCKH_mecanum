@@ -155,10 +155,10 @@ class PoseThread(QtCore.QThread):
 # --------------------------- Main UI ---------------------------
 
 class MecanumUI(QtWidgets.QMainWindow):
-    def __init__(self, camera_source=0, use_ros=False):
+    def __init__(self, camera_source = 0, use_ros = False):
         super().__init__()
         self.setWindowTitle('Mecanum Control UI')
-        self.resize(1200, 800)
+        self.resize(1500, 800)
         self.setStyleSheet("background-color: white; color: black;")
         self.use_ros = use_ros
 
@@ -179,7 +179,7 @@ class MecanumUI(QtWidgets.QMainWindow):
         ctrl_h = QtWidgets.QHBoxLayout()
         left_vbox.addLayout(ctrl_h)
         self.traj_combo = QtWidgets.QComboBox()
-        self.traj_combo.addItems(["Circle", "Square", "Line", "Figure-8"])
+        self.traj_combo.addItems(["Circle", "Square", "Elipse", "Figure-8"])
         ctrl_h.addWidget(QtWidgets.QLabel('Trajectory:'))
         ctrl_h.addWidget(self.traj_combo)
 
@@ -205,7 +205,7 @@ class MecanumUI(QtWidgets.QMainWindow):
 
         # Right: plots
         right_vbox = QtWidgets.QVBoxLayout()
-        layout.addLayout(right_vbox, 3)
+        layout.addLayout(right_vbox, 2)
 
         pg.setConfigOption('background', 'w')
         pg.setConfigOption('foreground', 'k')
@@ -213,7 +213,7 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.pw.setLabel('left', 'Y (m)')
         self.pw.setLabel('bottom', 'X (m)')
         self.pw.addLegend(offset=(10,10))
-        right_vbox.addWidget(self.pw, 3)
+        right_vbox.addWidget(self.pw, 2)
 
         self.ref_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, style=QtCore.Qt.DashLine, color='b'), name='Reference')
         self.actual_curve = self.pw.plot([], [], pen=pg.mkPen(width=2, color='r'), name='Actual')
@@ -250,10 +250,10 @@ class MecanumUI(QtWidgets.QMainWindow):
         self.omega_list = []
 
         # Camera/Pose thread
-        # self.cam_thread = CameraThread(source=camera_source, use_ros=self.use_ros)
-        # self.cam_thread.frame_ready.connect(self.on_frame)
-        # self.pose_thread = PoseThread(use_ros=self.use_ros)
-        # self.pose_thread.pose_ready.connect(self.on_pose)
+        self.cam_thread = CameraThread(source=camera_source, use_ros=self.use_ros)
+        self.cam_thread.frame_ready.connect(self.on_frame)
+        self.pose_thread = PoseThread(use_ros=self.use_ros)
+        self.pose_thread.pose_ready.connect(self.on_pose)
 
         # Signals
         self.start_btn.clicked.connect(self.on_start)
@@ -271,16 +271,16 @@ class MecanumUI(QtWidgets.QMainWindow):
     def on_start(self):
         self.status.showMessage('Starting...')
         self.start_time = time.time()
-        # if not self.cam_thread.isRunning():
-        #     self.cam_thread.start()
-        # if not self.pose_thread.isRunning():
-        #     self.pose_thread.start()
+        if not self.cam_thread.isRunning():
+            self.cam_thread.start()
+        if not self.pose_thread.isRunning():
+            self.pose_thread.start()
         self.status.showMessage('Running')
 
     def on_stop(self):
         self.status.showMessage('Stopping...')
-        # self.cam_thread.stop()
-        # self.pose_thread.stop()
+        self.cam_thread.stop()
+        self.pose_thread.stop()
         self.status.showMessage('Stopped')
         self.plot_matplotlib()
 
