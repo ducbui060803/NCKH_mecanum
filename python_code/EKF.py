@@ -6,6 +6,12 @@ import math
 import rospy
 from std_msgs.msg import Float32MultiArray
 import time
+import matplotlib.pyplot as plt
+
+v_measured_list = []
+v_estimated_list = []
+time_stamps = []
+start_time = time.time()
 
 v = 0
 pre_v = 0
@@ -19,6 +25,16 @@ def publish_pose(pose):
     position.data = [pose['x'], pose['y'], pose['phi'], pose['v'],pose['pose_x'], pose['pose_y'], pose['pose_phi']]  # Gửi 4 giá trị
     pose_pub.publish(position)
 
+def plot_velocity_compare():
+    plt.figure(figsize=(10, 6))
+    plt.plot(time_stamps, v_measured_list, 'r-', label="V measured (UART)", linewidth=0.8)
+    plt.plot(time_stamps, v_estimated_list, 'b--', label="V estimated (EKF)", linewidth=0.8)
+    plt.xlabel("Time (s)")
+    plt.ylabel("Velocity (m/s)")
+    plt.title("Comparison of Measured vs Estimated Velocity")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 class EKF:
     def __init__(self, dt, Q_fixed, R_fixed):
@@ -28,8 +44,8 @@ class EKF:
         # Trạng thái hệ thống x_t = [x, y, phi, v]
         self.x_t = np.array([
                             [0.0],         # x
-                            [-1.0],        # y
-                            [np.pi ],   # phi
+                            [0.0],        # y
+                            [np.pi/2 ],   # phi
                             [0.0]          # v
                         ])              
 
@@ -182,7 +198,7 @@ try:
         # Lấy trạng thái ước lượng hiện tại
         state = ekf.get_state().flatten()
         pre_v = v
-        print(f"Trạng thái ước lượng: x = {state[0]:.7f}, y = {state[1]:.7f}, phi = {state[2]:.7f}, v = {state[3]:.7f}")
+        print(f"Trạng thái ước lượng: x = {state[0]:.5f}, y = {state[1]:.5f}, phi = {state[2]:.5f}, v = {state[3]:.5f}")
         
         # state[0] = x_meas = x
         # state[1] = y_meas 
@@ -202,9 +218,15 @@ try:
         # Publish the position and yaw angle
         publish_pose(pose)
 
+        # Lưu giá trị để plot
+        now = time.time() - start_time
+        time_stamps.append(now)
+        v_measured_list.append(v)         # v từ UART
+        v_estimated_list.append(state[3]) # v từ EKF
    
         # rospy.loginfo(pose)
 
+    plot_velocity_compare()
 except rospy.ROSInterruptException:
     pass
 

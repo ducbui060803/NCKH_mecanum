@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import rospy
+import struct
 import serial
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray
@@ -43,23 +44,30 @@ class SerialCommNode:
         self.ser.write(command.encode())
     def run(self):
         global V
-        rate = rospy.Rate(10)  # 10 Hz
+        rate = rospy.Rate(100)  # 100 Hz
         while not rospy.is_shutdown():
             try:
                 line = self.ser.readline().decode('utf-8').strip()
-
                 if line:
                     # VD: 0.123 0.045
                     parts = line.split()
                     if len(parts) == 3:
                         V = float(parts[0])
-                        # V += 0.01
                         yaw = float(parts[1])
                         theta_dot = float(parts[2])
-                        print(f"Received V: {V}; yaw: {yaw};  theta_dot: {theta_dot}\n")
+                        # print(f"Received V: {V}; yaw: {yaw};  theta_dot: {theta_dot}\n")
                         msg = Float32MultiArray()
                         msg.data = [V, yaw, theta_dot]
                         self.vel_pub.publish(msg)
+                # data = self.ser.read(12)   # đọc đúng 12 bytes
+                # print(f"data = {data}")
+                # if len(data) == 12:
+                #     v, yaw, theta_dot = struct.unpack('<fff', data)  # little-endian float32
+                #     print(f"Received V={v}, yaw={yaw}, theta_dot={theta_dot}")
+
+                #     msg = Float32MultiArray()
+                #     msg.data = [v, yaw, theta_dot]
+                #     self.vel_pub.publish(msg)
 
             except Exception as e:
                 rospy.logwarn("Serial error: %s", str(e))
