@@ -29,6 +29,11 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+    float v;
+    float yaw;
+    float yaw_dot;
+} DataPacket;
 
 /* USER CODE END PTD */
 
@@ -41,8 +46,8 @@
 #define BNO055_ADDRESS 				0x28 << 1  // Shifted 7-bit to 8-bit I2C address
 #define BNO055_EULER_H_LSB 			0x1A
 #define BNO055_GYRO_DATA_Z_LSB 		0x1E
-#define RX_BUFFER_SIZE 				100
-#define TX_BUFFER_SIZE 				100
+#define RX_BUFFER_SIZE 				25
+#define TX_BUFFER_SIZE 				25
 // Kích thước robot (m)
 #define L1 							0.11  	// Khoảng cách từ trục OpYp đến bánh xe
 #define L2 							0.1 	// Khoảng cách từ trục OpXp đến bánh xe
@@ -78,19 +83,23 @@ DMA_HandleTypeDef hdma_usart6_tx;
 /* USER CODE BEGIN PV */
 
 // GPIO chân điều khiển chiều quay (IN1 & IN2)
-//GPIO_TypeDef* in1_port[4] = { GPIOA, GPIOD, GPIOB, GPIOC };
-//uint16_t in1_pin[4]       = { GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_9, GPIO_PIN_2 };
-//
-//GPIO_TypeDef* in2_port[4] = { GPIOC, GPIOD, GPIOE, GPIOC };
-//uint16_t in2_pin[4]       = { GPIO_PIN_11, GPIO_PIN_6, GPIO_PIN_3, GPIO_PIN_0 };
-GPIO_TypeDef* in1_port[4] = { GPIOD, GPIOA, GPIOC, GPIOE };
-uint16_t in1_pin[4]       = { GPIO_PIN_6, GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_3 };
+GPIO_TypeDef* in1_port[4] = { GPIOA, GPIOD, GPIOB, GPIOC};
+uint16_t in1_pin[4]       = { GPIO_PIN_15, GPIO_PIN_6, GPIO_PIN_9, GPIO_PIN_0};
 
-GPIO_TypeDef* in2_port[4] = { GPIOD, GPIOC, GPIOC, GPIOB };
-uint16_t in2_pin[4]       = { GPIO_PIN_2, GPIO_PIN_11, GPIO_PIN_0, GPIO_PIN_9 };
-// PWM kênh và timer
-TIM_HandleTypeDef* htim_pwm[4] = { &htim5, &htim9, &htim10, &htim5 };
-uint32_t tim_channel[4]        = { TIM_CHANNEL_3, TIM_CHANNEL_2, TIM_CHANNEL_1, TIM_CHANNEL_4 };
+GPIO_TypeDef* in2_port[4] = { GPIOC, GPIOD, GPIOE, GPIOC };
+uint16_t in2_pin[4]       = { GPIO_PIN_11, GPIO_PIN_2, GPIO_PIN_3, GPIO_PIN_2};
+
+TIM_HandleTypeDef* htim_pwm[4] = { &htim9, &htim5, &htim10, &htim5 };
+uint32_t tim_channel[4]        = { TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_1, TIM_CHANNEL_4 };
+
+//GPIO_TypeDef* in1_port[4] = { GPIOD, GPIOA, GPIOC, GPIOE };
+//uint16_t in1_pin[4]       = { GPIO_PIN_6, GPIO_PIN_15, GPIO_PIN_2, GPIO_PIN_3 };
+//
+//GPIO_TypeDef* in2_port[4] = { GPIOD, GPIOC, GPIOC, GPIOB };
+//uint16_t in2_pin[4]       = { GPIO_PIN_2, GPIO_PIN_11, GPIO_PIN_0, GPIO_PIN_9 };
+//// PWM kênh và timer
+//TIM_HandleTypeDef* htim_pwm[4] = { &htim5, &htim9, &htim10, &htim5 };
+//uint32_t tim_channel[4]        = { TIM_CHANNEL_3, TIM_CHANNEL_2, TIM_CHANNEL_1, TIM_CHANNEL_4 };
 UART_HandleTypeDef huart6;
 /* NOTE: Swap M1 vs M2*/
 volatile uint8_t encoder_flag =  FALSE;
@@ -99,29 +108,39 @@ char rx_data;                  		// ký tự nhận được tạm thời
 char temp_line[100];
 uint8_t rx_buffer[RX_BUFFER_SIZE];  // Vòng đệm DMA nhận
 char tx_buffer[TX_BUFFER_SIZE];  // Buffer gửi
+DataPacket tx_data;
 uint8_t rx_index 		= 0;
 uint8_t started 		= 0;
-uint8_t uart_tx_ready 	= 0;
+volatile uint8_t uart_tx_ready 	= 1;
 uint8_t temp_line_index = 0;
-uint8_t send_flag 		= 0;
 uint8_t manual_mode = 0;
 uint32_t last_manual_time = 0;
 int16_t encoder_current[4];
 int16_t encoder_past[4];
 int16_t delta_encoder[4];
 int16_t speed_rpm[4];
+float speed_rps[4];
+int32_t pwm_value_before_abs[4];
+float pwm_value[4];
+static uint32_t t_prev = 0;
 float yaw_deg 			= 0;
 float yaw 				= 0;
-float theta_dot 		= 0;
-float vx 				= 0;
-float vy  				= 0;
-float omega 			= 0;
+float yaw_prev 			= 0;
+
+float yaw_dot 			= 0;
+volatile float vx 		= 0;
+volatile float vy  		= 0;
+volatile float omega 	= 0;
+float vx_control 		= 0;
+float vy_control  		= 0;
+float omega_control 	= 0;
 float V 				= 0;
-float V_send 			= 0;
+float v_send 			= 0;
 float yaw_send 			= 0;
 float theta_dot_send 	= 0;
 
 float Setpoint[4];
+float Setpoint_before_fix[4]; //////////////////////// Debug variable
 float SpeedMeasured[4];
 float PWM_Output[4];
 float integral[4] = {0};
@@ -149,6 +168,7 @@ void read_IMU(void);
 void parse_uart_line(char *line);
 void move(float vx, float vy, float omega);
 void driveMotor(int idx, float speed);
+void update_yaw_dot(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -161,6 +181,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         // Đặt code cần chạy mỗi chu kỳ ở đây
     	encoder_flag = TRUE;
     	imu_flag = TRUE;
+    	update_encoder_speed();
+    	read_IMU();
     }
 }
 
@@ -173,16 +195,24 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART6)
+    {
+
+    }
+}
+
 void user_init()
 {
 	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_3); //M2
-	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4); //M3
+	HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4); //M4 conflict encoder
 	HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_2); //M1
-	HAL_TIM_PWM_Start(&htim10, TIM_CHANNEL_1); //M4
+	HAL_TIM_PWM_Start(&htim10, TIM_CHANNEL_1); //M3 conflict encoder
 
 	HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL); //M1
-	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL); //M3
-	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL); //M4
+	HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL); //M3 conflict
+	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL); //M4 conflict
 	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL); //M2
 
 	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 0);
@@ -211,17 +241,17 @@ void user_init()
 	 // Reset BNO055
 	uint8_t reset_cmd = 0x20;
 	HAL_I2C_Mem_Write(&hi2c3, BNO055_ADDRESS, 0x3F, 1, &reset_cmd, 1, HAL_MAX_DELAY);
-	HAL_Delay(3000);  // Rất quan trọng!
+	HAL_Delay(2000);  // Rất quan trọng!
 
 	// Set to config mode
 	uint8_t config_mode = 0x00;
 	HAL_I2C_Mem_Write(&hi2c3, BNO055_ADDRESS, 0x3D, 1, &config_mode, 1, HAL_MAX_DELAY);
-	HAL_Delay(25);
+	HAL_Delay(250);
 
 	// Set to NDOF mode
 	uint8_t ndof_mode = 0x0C;
 	HAL_I2C_Mem_Write(&hi2c3, BNO055_ADDRESS, 0x3D, 1, &ndof_mode, 1, HAL_MAX_DELAY);
-	HAL_Delay(20);
+	HAL_Delay(200);
 }
 
 void update_encoder_speed(void)
@@ -231,16 +261,16 @@ void update_encoder_speed(void)
 		switch (i)
 		{
 			case 0:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim4); //M2
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim1); //M2
 				break;
 			case 1:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim1); //M1
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim4); //M1
 				break;
 			case 2:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim3); //M3
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim2); //M4 conflict
 				break;
 			case 3:
-				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim2); //M4
+				encoder_current[i] = __HAL_TIM_GET_COUNTER(&htim3); //M3 conflict
 				break;
 			default:
 				break;
@@ -261,9 +291,21 @@ void update_encoder_speed(void)
 
 	    encoder_past[i] = encoder_current[i];
 
-	    float speed_rps = (float) delta_encoder[i] / PPR / DT;
-	    speed_rpm[i] = speed_rps * 60.0f;
+	    speed_rps[i] = (float) delta_encoder[i] / PPR / DT;
+	    if (i != 2)
+	    {
+	    	speed_rps[i] = -speed_rps[i];
+	    }
+
+//	    speed_rpm[i] = speed_rps * 60.0f;
 	}
+
+    vx_control = (speed_rps[0] + speed_rps[1] + speed_rps[2] + speed_rps[3]) * r / 4.0;
+    vy_control = (-speed_rps[0] + speed_rps[1] + speed_rps[2] - speed_rps[3]) * r / 4.0;
+    // theta_dot =  (-SpeedMeasured[0] + SpeedMeasured[1] - SpeedMeasured[2] + SpeedMeasured[3]) * r / (4.0 * (L1 + L2));
+    // toán vận tốc tổng hợp của xe (vận tốc theo hướng tổng hợp)
+    v_send = sqrt(vx_control * vx_control + vy_control * vy_control);
+
 }
 
 void read_IMU(void)
@@ -274,16 +316,36 @@ void read_IMU(void)
     HAL_I2C_Mem_Read(&hi2c3, BNO055_ADDRESS, BNO055_EULER_H_LSB, 1, buffer, 2, HAL_MAX_DELAY);
     int16_t yaw_raw = (int16_t)((buffer[1] << 8) | buffer[0]);
     yaw_deg = ((float)yaw_raw) / 16.0f;  // 1° = 16 LSB
+    /* Yaw calib */
+    yaw_deg += 80;
     if (yaw_deg > 180)
         yaw_deg -= 360;
     yaw_deg += 180;
     yaw = yaw_deg * (M_PI / 180.0f);  // rad
 
-    // ==== Read Gyro Z (yaw rate) ====
-    HAL_I2C_Mem_Read(&hi2c3, BNO055_ADDRESS, BNO055_GYRO_DATA_Z_LSB, 1, buffer, 2, HAL_MAX_DELAY);
-    int16_t gyro_z_raw = (int16_t)((buffer[1] << 8) | buffer[0]);
-    theta_dot = ((float)gyro_z_raw) / 16.0f;  // deg/s
-    theta_dot *= (M_PI / 180.0f);  // rad/s
+//    // ==== Read Gyro Z (yaw rate) ====
+//    HAL_I2C_Mem_Read(&hi2c3, BNO055_ADDRESS, BNO055_GYRO_DATA_Z_LSB, 1, buffer, 2, HAL_MAX_DELAY);
+//    int16_t gyro_z_raw = (int16_t)((buffer[1] << 8) | buffer[0]);
+//    theta_dot = ((float)gyro_z_raw) / 16.0f;  // deg/s
+//    theta_dot *= (M_PI / 180.0f);  // rad/s
+    update_yaw_dot();
+}
+
+void update_yaw_dot(void)
+{
+    uint32_t t_now = HAL_GetTick(); // ms
+    float dt = (t_now - t_prev) / 1000.0f; // s
+
+    float dyaw = yaw - yaw_prev;
+
+    // xử lý wrap-around (-pi ↔ pi)
+    if (dyaw > M_PI) dyaw -= 2*M_PI;
+    else if (dyaw < -M_PI) dyaw += 2*M_PI;
+
+    yaw_dot = dyaw / dt;
+
+    yaw_prev = yaw;
+    t_prev = t_now;
 }
 
 void check_uart_command(void)
@@ -318,7 +380,10 @@ void check_uart_command(void)
 
 void parse_uart_line(char *line)
 {
-    float vx_local = 0, vy_local = 0, omega_local = 0;
+	vx = 0;
+	vy = 0;
+	omega = 0;
+    float vx_global = 0, vy_global = 0, omega_global = 0;
 
     char *vxStr = strtok(line, " ");
     char *vyStr = strtok(NULL, " ");
@@ -326,15 +391,16 @@ void parse_uart_line(char *line)
 
     if (vxStr && vyStr && omegaStr)
     {
-        vx_local = atof(vxStr);
-        vy_local = atof(vyStr);
-        omega_local = atof(omegaStr);
+        vx_global = atof(vxStr);
+        vy_global = atof(vyStr);
+        omega_global = atof(omegaStr);
 
-        vx = vx_local;
-        vy = vy_local;
-        omega = omega_local;
+        vx = vx_global;
+        vy = vy_global;
+        omega = omega_global;
 
         started = 1;
+//        move(vx, vy, omega);
         move(vx, vy, omega);
     }
 
@@ -346,27 +412,22 @@ void move(float vx, float vy, float omega)
 {
     float v1 = (vx - vy - (L1 + L2) * omega) / r;
     float v2 = (vx + vy + (L1 + L2) * omega) / r;
-    float v3 = (vx - vy + (L1 + L2) * omega) / r;
-    float v4 = (vx + vy - (L1 + L2) * omega) / r;
+    float v3 = (vx + vy - (L1 + L2) * omega) / r;
+    float v4 = (vx - vy + (L1 + L2) * omega) / r;
 
     float max_speed = fmaxf(fmaxf(fabsf(v1), fabsf(v2)), fmaxf(fabsf(v3), fabsf(v4)));
-    if (max_speed > 1.0f)
+    if (max_speed > PWM_MAX)
     {
-        v1 /= max_speed;
-        v2 /= max_speed;
-        v3 /= max_speed;
-        v4 /= max_speed;
+    	v1 = v1 * PWM_MAX / max_speed;
+        v2 = v2 * PWM_MAX / max_speed;
+        v3 = v3 * PWM_MAX / max_speed;
+        v4 = v4 * PWM_MAX / max_speed;
     }
 
-    Setpoint[0] = v1 * MAX_SPEED;
-    Setpoint[1] = v2 * MAX_SPEED;
-    Setpoint[2] = v3 * MAX_SPEED;
-    Setpoint[3] = v4 * MAX_SPEED;
-
-    driveMotor(0, Setpoint[0] / MAX_SPEED);  // Normalized từ -1.0 đến 1.0
-    driveMotor(1, Setpoint[1] / MAX_SPEED);
-    driveMotor(2, Setpoint[2] / MAX_SPEED);
-    driveMotor(3, Setpoint[3] / MAX_SPEED);
+    driveMotor(0, v1);  // Normalized từ -1.0 đến 1.0
+    driveMotor(1, v2);
+    driveMotor(2, v3);
+    driveMotor(3, v4);
 }
 
 void driveMotor(int idx, float speed)
@@ -374,19 +435,16 @@ void driveMotor(int idx, float speed)
     if (idx < 0 || idx >= 4) return;
 
     uint8_t forward = (speed >= 0);
+
     float abs_speed = fabsf(speed);
 
-    if (abs_speed > 1.0f) abs_speed = 1.0f;  // Giới hạn từ -1.0 đến 1.0
-
-    // Tính giá trị PWM theo PWM_MAX
-    uint32_t pwm_value = (uint32_t)(abs_speed * PWM_MAX);
-
+    pwm_value[idx] = (uint32_t)(abs_speed) * 1000 / 4;
     // Điều khiển chiều
     HAL_GPIO_WritePin(in1_port[idx], in1_pin[idx], forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
     HAL_GPIO_WritePin(in2_port[idx], in2_pin[idx], forward ? GPIO_PIN_RESET : GPIO_PIN_SET);
 
     // Xuất PWM
-    __HAL_TIM_SET_COMPARE(htim_pwm[idx], tim_channel[idx], pwm_value);
+    __HAL_TIM_SET_COMPARE(htim_pwm[idx], tim_channel[idx], pwm_value[idx]);
 }
 /* USER CODE END 0 */
 
@@ -403,6 +461,7 @@ int main(void)
 	/* MCU Configuration--------------------------------------------------------*/
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+
 	HAL_Init();
 
 	/* USER CODE BEGIN Init */
@@ -442,12 +501,12 @@ int main(void)
 		/* USER CODE BEGIN 3 */
 		if (TRUE == encoder_flag)
 		{
-			update_encoder_speed();
+//			update_encoder_speed();
 			encoder_flag = FALSE;
 		}
 		if (TRUE == imu_flag)
 		{
-			read_IMU();
+//			read_IMU();
 			imu_flag = FALSE;
 		}
 
@@ -459,19 +518,20 @@ int main(void)
 			move(0, 0, 0);  // Dừng robot nếu timeout
 		}
 
-		if (send_flag && uart_tx_ready)
+//		tx_data.v = v_send;
+//		tx_data.yaw = yaw;
+//		tx_data.yaw_dot = yaw_dot;
+		snprintf(tx_buffer, sizeof(tx_buffer), "%.3f %.3f %.3f\n", v_send, yaw, yaw_dot);
+		if (huart6.gState == HAL_UART_STATE_READY)
 		{
-			send_flag = 0;
-			uart_tx_ready = 0;
-
-			snprintf(tx_buffer, sizeof(tx_buffer), "%.3f %.3f %.3f\n", V_send, yaw_send, theta_dot_send);
-			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)tx_buffer, strlen(tx_buffer));
+			HAL_UART_Transmit(&huart6, (uint8_t *)tx_buffer, strlen(tx_buffer), 3000);
+//			HAL_UART_Transmit(&huart6, (uint8_t*)&tx_data, sizeof(tx_data), 3000);
 		}
 
-//		// Forward
-//		driveMotor(0, 200);
+//		//Forward
+//		driveMotor(0, -200);
 //		driveMotor(1, 200);
-//		driveMotor(2, 200);
+//		driveMotor(2, -200);
 //		driveMotor(3, 200);
 //		HAL_Delay(3000);
 //
@@ -483,34 +543,6 @@ int main(void)
 //		HAL_Delay(3000);
 //
 //		// Backward
-//		driveMotor(0, -200);
-//		driveMotor(1, -200);
-//		driveMotor(2, -200);
-//		driveMotor(3, -200);
-//		HAL_Delay(3000);
-//
-//		// Stop
-//		for (int i = 0; i < 4; i++)
-//		{
-//			driveMotor(i, 0);
-//		}
-//		HAL_Delay(3000);
-//
-//		// Left
-//		driveMotor(0, -200);
-//		driveMotor(1, 200);
-//		driveMotor(2, -200);
-//		driveMotor(3, 200);
-//		HAL_Delay(3000);
-//
-//		// Stop
-//		for (int i = 0; i < 4; i++)
-//		{
-//			driveMotor(i, 0);
-//		}
-//		HAL_Delay(3000);
-//
-//		// Right
 //		driveMotor(0, 200);
 //		driveMotor(1, -200);
 //		driveMotor(2, 200);
@@ -522,6 +554,70 @@ int main(void)
 //		{
 //			driveMotor(i, 0);
 //		}
+//		HAL_Delay(3000);
+//
+//		// Left
+//		driveMotor(0, 200);
+//		driveMotor(1, 200);
+//		driveMotor(2, -200);
+//		driveMotor(3, -200);
+//		HAL_Delay(3000);
+//
+//		// Stop
+//		for (int i = 0; i < 4; i++)
+//		{
+//			driveMotor(i, 0);
+//		}
+//		HAL_Delay(3000);
+//
+//		// Right
+//		driveMotor(0, -200);
+//		driveMotor(1, -200);
+//		driveMotor(2, 200);
+//		driveMotor(3, 200);
+//		HAL_Delay(3000);
+//
+//		// Stop
+//		for (int i = 0; i < 4; i++)
+//		{
+//			driveMotor(i, 0);
+//		}
+//		HAL_Delay(3000);
+
+//		move(5, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(-5, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 5, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, -5, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 20);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 0);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, -20);
+//		HAL_Delay(3000);
+//
+//		move(0, 0, 0);
 //		HAL_Delay(3000);
 	}
 	/* USER CODE END 3 */

@@ -216,7 +216,7 @@ class BacksteppingController:
             self.pose_x = msg.data[4]
             self.pose_y = msg.data[5]
             self.pose_phi = msg.data[6]
-            print(f"v: {self.v} ")
+            # print(f"v: {self.v} ")
             self.x_dot = self.v * math.cos(self.yaw)
             self.y_dot = self.v * math.sin(self.yaw) 
         else:
@@ -254,8 +254,8 @@ class BacksteppingController:
         # self.k1 = 15
         # self.k2 = 0.8
 
-        self.k1 = 4
-        self.k2 = 1
+        self.k1 = 1
+        self.k2 = 0.1
         self.plot_initialized = False
 
         # Robot state
@@ -272,7 +272,7 @@ class BacksteppingController:
         # Thông số quỹ đạoq
         # self.T = 32.0       # Tổng thời gian (s)
         # self.T = 40.0       # Tổng thời gian (s)
-        self.T = 20.0       # Tổng thời gian (s)
+        self.T = 10.0       # Tổng thời gian (s)
 
         self.dt = 0.01     # Bước thời gian (s)
         self.N = int(self.T / self.dt)
@@ -290,6 +290,10 @@ class BacksteppingController:
         # Ve quy dao 
         self.error_x = []
         self.error_y = []
+        self.actual_vx = []
+        self.actual_vy = []
+        self.desired_vx = []
+        self.desired_vy = []
         self.error_velo_x = []
         self.error_velo_y = []
         self.error_time = []
@@ -356,6 +360,8 @@ class BacksteppingController:
         # ============================
         # 2. Errors
         # ============================
+        self.x = 0
+        self.yaw = np.pi/2
         e1 = np.array([self.x_d - self.x, self.y_d - self.y, self.yaw_d - self.yaw])
         e1[2] = wrap_to_pi(e1[2])  # Gói góc sai số về [-pi, pi]
 
@@ -381,7 +387,9 @@ class BacksteppingController:
             self.y_dot_d - self.y_dot,
             self.yaw_dot_d - self.yaw_dot
         ])
+        print(f"x_dot: {self.x_dot} ")
         print(f"y_dot: {self.y_dot} ")
+        print(f"x_dot_d: {self.x_dot_d} ")
         print(f"y_dot_d: {self.y_dot_d} ")
         # print(f"e1: {e1} ")
         # print(f"e1_dot: {e1_dot} ")
@@ -398,6 +406,9 @@ class BacksteppingController:
         u[0:2] = np.clip(u[0:2], -100, 100)
         u[2]   = np.clip(u[2], -10, 10)
         
+        u[0] = 0
+        u[1] = 0.1
+        u[2] = 0
         # Publish command
         cmd = Twist()
         cmd.linear.x = u[0]
@@ -412,6 +423,11 @@ class BacksteppingController:
         self.actual_path.append((self.pose_x, self.pose_y, self.pose_phi))
         self.desired_path.append((self.x_d, self.y_d, self.yaw_d))
 
+        self.actual_vx.append(self.x_dot)
+        self.actual_vy.append(self.y_dot)
+        self.desired_vx.append(self.x_dot_d)
+        self.desired_vy.append(self.y_dot_d)
+        
         self.error_x.append(abs(self.x_d - self.pose_x))
         self.error_y.append(abs(self.y_d - self.pose_y))
         self.error_velo_x.append(abs(self.x_dot_d - self.x_dot))
@@ -525,6 +541,37 @@ def plot_position_vs_reference(controller):
 
     plt.show()
 
+def plot_velocity(controller):
+    time_stamps = controller.error_time
+
+    # Velocity error
+    x_dot_traj = controller.desired_vx
+    y_dot_traj = controller.desired_vy
+    actual_vx  = controller.actual_vx
+    actual_vy  = controller.actual_vy
+    plt.figure(figsize=(10, 8))
+
+    # --- Vx ---
+    plt.subplot(2, 1, 1)
+    plt.plot(time_stamps, actual_vx, label="actual_vx", color='blue', linewidth=0.5)
+    plt.plot(time_stamps, x_dot_traj, label="x_dot_traj", color='red', linestyle='--')
+    plt.ylabel("vx (m/s)")
+    plt.title("Velocity Tracking - vx")
+    plt.legend()
+    plt.grid(True)
+
+    # --- Vy ---
+    plt.subplot(2, 1, 2)
+    plt.plot(time_stamps, actual_vy, label="actual_vy", color='blue', linewidth=0.5)
+    plt.plot(time_stamps, y_dot_traj, label="y_dot_traj", color='red', linestyle='--')
+    plt.ylabel("vy (m/s)")
+    plt.title("Velocity Tracking - vy")
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
 def plot_velocity_error(controller):
     time_stamps = controller.error_time
 
@@ -588,6 +635,7 @@ if __name__ == '__main__':
     finally:
         plot_paths(controller.desired_path, controller.actual_path, controller.mearsure_path)
         plot_position_vs_reference(controller) 
+        plot_velocity(controller)
         plot_velocity_error(controller)
         plot_control_inputs(controller)
 
