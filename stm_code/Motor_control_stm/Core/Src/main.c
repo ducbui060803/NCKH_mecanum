@@ -42,6 +42,7 @@ typedef struct {
 #define PWM_FAST 					600
 #define PWM_SLOW 					300
 #define PPR 	 					240        // Pulses per revolution
+#define RPS_MAX						30
 #define DT 		 					0.01f      // 10ms (chu kỳ gọi hàm đo)
 #define BNO055_ADDRESS 				0x28 << 1  // Shifted 7-bit to 8-bit I2C address
 #define BNO055_EULER_H_LSB 			0x1A
@@ -52,8 +53,7 @@ typedef struct {
 #define L1 							0.11  	// Khoảng cách từ trục OpYp đến bánh xe
 #define L2 							0.1 	// Khoảng cách từ trục OpXp đến bánh xe
 #define r 							0.035   // Bán kính bánh xe
-#define MAX_SPEED 					100
-#define PWM_MAX 					300
+#define MAX_SPEED 					15
 #define MANUAL_TIMEOUT 				3000  // 3s timeout
 #define TRUE						1
 #define FALSE						0
@@ -292,7 +292,7 @@ void update_encoder_speed(void)
 	    encoder_past[i] = encoder_current[i];
 
 	    speed_rps[i] = (float) delta_encoder[i] / PPR / DT;
-	    if (i != 2)
+	    if (i == 2)
 	    {
 	    	speed_rps[i] = -speed_rps[i];
 	    }
@@ -305,7 +305,6 @@ void update_encoder_speed(void)
     // theta_dot =  (-SpeedMeasured[0] + SpeedMeasured[1] - SpeedMeasured[2] + SpeedMeasured[3]) * r / (4.0 * (L1 + L2));
     // toán vận tốc tổng hợp của xe (vận tốc theo hướng tổng hợp)
     v_send = sqrt(vx_control * vx_control + vy_control * vy_control);
-
 }
 
 void read_IMU(void)
@@ -317,7 +316,7 @@ void read_IMU(void)
     int16_t yaw_raw = (int16_t)((buffer[1] << 8) | buffer[0]);
     yaw_deg = ((float)yaw_raw) / 16.0f;  // 1° = 16 LSB
     /* Yaw calib */
-    yaw_deg += 80;
+    yaw_deg += 90;
     if (yaw_deg > 180)
         yaw_deg -= 360;
     yaw_deg += 180;
@@ -416,12 +415,12 @@ void move(float vx, float vy, float omega)
     float v4 = (vx - vy + (L1 + L2) * omega) / r;
 
     float max_speed = fmaxf(fmaxf(fabsf(v1), fabsf(v2)), fmaxf(fabsf(v3), fabsf(v4)));
-    if (max_speed > PWM_MAX)
+    if (max_speed > MAX_SPEED)
     {
-    	v1 = v1 * PWM_MAX / max_speed;
-        v2 = v2 * PWM_MAX / max_speed;
-        v3 = v3 * PWM_MAX / max_speed;
-        v4 = v4 * PWM_MAX / max_speed;
+    	v1 = v1 * MAX_SPEED / max_speed;
+        v2 = v2 * MAX_SPEED / max_speed;
+        v3 = v3 * MAX_SPEED / max_speed;
+        v4 = v4 * MAX_SPEED / max_speed;
     }
 
     driveMotor(0, v1);  // Normalized từ -1.0 đến 1.0
@@ -438,7 +437,7 @@ void driveMotor(int idx, float speed)
 
     float abs_speed = fabsf(speed);
 
-    pwm_value[idx] = (uint32_t)(abs_speed) * 1000 / 4;
+    pwm_value[idx] = (uint32_t) (abs_speed * 100 / 3);
     // Điều khiển chiều
     HAL_GPIO_WritePin(in1_port[idx], in1_pin[idx], forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
     HAL_GPIO_WritePin(in2_port[idx], in2_pin[idx], forward ? GPIO_PIN_RESET : GPIO_PIN_SET);
@@ -528,13 +527,13 @@ int main(void)
 //			HAL_UART_Transmit(&huart6, (uint8_t*)&tx_data, sizeof(tx_data), 3000);
 		}
 
-//		//Forward
-//		driveMotor(0, -200);
-//		driveMotor(1, 200);
-//		driveMotor(2, -200);
-//		driveMotor(3, 200);
+////		//Forward
+//		driveMotor(0, 500);
+//		driveMotor(1, 500);
+//		driveMotor(2, 500);
+//		driveMotor(3, 500);
 //		HAL_Delay(3000);
-//
+////
 //		// Stop
 //		for (int i = 0; i < 4; i++)
 //		{
@@ -584,13 +583,13 @@ int main(void)
 //		}
 //		HAL_Delay(3000);
 
-//		move(5, 0, 0);
+//		move(0.4, 0, 0);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
 //		HAL_Delay(3000);
 //
-//		move(-5, 0, 0);
+//		move(-0.4, 0, 0);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
