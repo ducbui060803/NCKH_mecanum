@@ -182,6 +182,51 @@ def generate_path(path_type="circle", length=1.0, radius=1.0, points=100, angle_
 
     return x, y, yaw, x_dot, y_dot, yaw_dot, x_ddot, y_ddot, yaw_ddot
 
+def robot_dynamics(u, state, pose, Ts=0.01):
+    # Thông số hệ thống
+    m = 6
+    L1 = 0.1
+    L2 = 0.1
+    Iz = 0.22 + 0.02328
+
+    # Giải nạp input
+    Fx, Fy, Mz = u
+    vx, vy, wz = state
+    x, y, theta = pose
+
+    # Ma trận quán tính
+    D = np.array([
+        [m,   0,   -m*L1],
+        [0,   m,    m*L2],
+        [-m*L1, m*L2, Iz + m*(L1**2 + L2**2)]
+    ])
+
+    # Nhiễu
+    n_zeta = np.array([
+        -m * (vy + L2 * wz),
+         m * (vx - L1 * wz),
+         m * wz * (L2 * vx + L1 * vy)
+    ])
+
+    # Gia tốc
+    zeta_dot = np.linalg.solve(D, u - n_zeta)  # [ax, ay, wz_dot]
+
+    # Tích phân Euler để ra vận tốc mới
+    vx_next = vx + Ts * zeta_dot[0]
+    vy_next = vy + Ts * zeta_dot[1]
+    wz_next = wz + Ts * zeta_dot[2]
+
+    # Kinematic (body -> global)
+    x_dot = np.cos(theta)*vx - np.sin(theta)*vy
+    y_dot = np.sin(theta)*vx + np.cos(theta)*vy
+    theta_dot = wz
+
+    x_next = x + Ts * x_dot
+    y_next = y + Ts * y_dot
+    theta_next = np.arctan2(np.sin(theta + Ts * theta_dot), np.cos(theta + Ts * theta_dot))  # wrap [-pi,pi]
+
+    return np.array([x_next, y_next, theta_next, vx_next, vy_next, wz_next])
+    
 class BacksteppingController:
     # Vector n(ζ)
     def n_zeta(self, u, v, r):
@@ -254,7 +299,7 @@ class BacksteppingController:
         # self.k1 = 15
         # self.k2 = 0.8
 
-        self.k1 = 1
+        self.k1 = 4
         self.k2 = 0.1
         self.plot_initialized = False
 
@@ -279,7 +324,7 @@ class BacksteppingController:
         self.trajectory_index = 0
         
         # self.x_traject, self.y_traject, self.angles_traject = generate_circle_path(1 ,self.N)
-        self.pathtype = "line_y"
+        self.pathtype = "line_x"
         self.x_traject, self.y_traject, self.angles_traject, \
         self.x_dot_traject, self.y_dot_traject, self.yaw_dot_traject, \
         self.x_ddot_traject, self.y_ddot_traject, self.yaw_ddot_traject = generate_path(self.pathtype, 1.0, 1.0, self.N, np.pi/2, self.T)
@@ -387,13 +432,7 @@ class BacksteppingController:
             self.y_dot_d - self.y_dot,
             self.yaw_dot_d - self.yaw_dot
         ])
-        print(f"x_dot: {self.x_dot} ")
-        print(f"y_dot: {self.y_dot} ")
-        print(f"x_dot_d: {self.x_dot_d} ")
-        print(f"y_dot_d: {self.y_dot_d} ")
-        # print(f"e1: {e1} ")
-        # print(f"e1_dot: {e1_dot} ")
-        # print(f"e2: {e2} ")
+
         zeta_dot_d = np.dot(J_inv, np.array([
             self.x_ddot_d,
             self.y_ddot_d,
@@ -404,21 +443,20 @@ class BacksteppingController:
 
         # Saturation (optional)
         u[0:2] = np.clip(u[0:2], -100, 100)
-        u[2]   = np.clip(u[2], -10, 10)
+        u[2]   = np.clip(u[2], -20, 20)
         
-        u[0] = 0
-        u[1] = 0.1
-        u[2] = 0
+        x_next, y_next, theta_next, vx_next, vy_next, wz_next = robot_dynamics(u,[self.x_dot, self.y_dot, self.yaw_dot],[self.x, self.y, self.yaw],Ts=0.01)
         # Publish command
         cmd = Twist()
-        cmd.linear.x = u[0]
-        cmd.linear.y = u[1]
-        cmd.angular.z = u[2]
+        cmd.linear.x = vx_next
+        cmd.linear.y = vy_next
+        cmd.angular.z = wz_next
 
         self.cmd_pub.publish(cmd)
 
         # Draw path
-        self.u_history.append([u[0], u[1], u[2]])
+        # self.u_history.append([u[0], u[1], u[2]])
+        self.u_history.append([vx_next, vy_next, wz_next])
         self.mearsure_path.append((self.x, self.y, self.yaw))
         self.actual_path.append((self.pose_x, self.pose_y, self.pose_phi))
         self.desired_path.append((self.x_d, self.y_d, self.yaw_d))

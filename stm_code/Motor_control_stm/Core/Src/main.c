@@ -39,10 +39,10 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define PWM_FAST 					600
-#define PWM_SLOW 					300
+#define PWM_DEADZONE 				100
 #define PPR 	 					240        // Pulses per revolution
 #define RPS_MAX						30
+#define PWM_LIMIT					500
 #define DT 		 					0.01f      // 10ms (chu kỳ gọi hàm đo)
 #define BNO055_ADDRESS 				0x28 << 1  // Shifted 7-bit to 8-bit I2C address
 #define BNO055_EULER_H_LSB 			0x1A
@@ -83,11 +83,11 @@ DMA_HandleTypeDef hdma_usart6_tx;
 /* USER CODE BEGIN PV */
 
 // GPIO chân điều khiển chiều quay (IN1 & IN2)
-GPIO_TypeDef* in1_port[4] = { GPIOA, GPIOD, GPIOB, GPIOC};
-uint16_t in1_pin[4]       = { GPIO_PIN_15, GPIO_PIN_6, GPIO_PIN_9, GPIO_PIN_0};
+GPIO_TypeDef* in1_port[4] = { GPIOC, GPIOD, GPIOE, GPIOC};
+uint16_t in1_pin[4]       = { GPIO_PIN_11, GPIO_PIN_2, GPIO_PIN_3, GPIO_PIN_2};
 
-GPIO_TypeDef* in2_port[4] = { GPIOC, GPIOD, GPIOE, GPIOC };
-uint16_t in2_pin[4]       = { GPIO_PIN_11, GPIO_PIN_2, GPIO_PIN_3, GPIO_PIN_2};
+GPIO_TypeDef* in2_port[4] = { GPIOA, GPIOD, GPIOB, GPIOC };
+uint16_t in2_pin[4]       = { GPIO_PIN_15, GPIO_PIN_6, GPIO_PIN_9, GPIO_PIN_0};
 
 TIM_HandleTypeDef* htim_pwm[4] = { &htim9, &htim5, &htim10, &htim5 };
 uint32_t tim_channel[4]        = { TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_1, TIM_CHANNEL_4 };
@@ -110,7 +110,6 @@ uint8_t rx_buffer[RX_BUFFER_SIZE];  // Vòng đệm DMA nhận
 char tx_buffer[TX_BUFFER_SIZE];  // Buffer gửi
 DataPacket tx_data;
 uint8_t rx_index 		= 0;
-uint8_t started 		= 0;
 volatile uint8_t uart_tx_ready 	= 1;
 uint8_t temp_line_index = 0;
 uint8_t manual_mode = 0;
@@ -121,6 +120,7 @@ int16_t delta_encoder[4];
 int16_t speed_rpm[4];
 float speed_rps[4];
 int32_t pwm_value_before_abs[4];
+float v1, v2, v3, v4;
 float pwm_value[4];
 static uint32_t t_prev = 0;
 float yaw_deg 			= 0;
@@ -128,12 +128,14 @@ float yaw 				= 0;
 float yaw_prev 			= 0;
 
 float yaw_dot 			= 0;
-volatile float vx 		= 0;
-volatile float vy  		= 0;
-volatile float omega 	= 0;
+float vx_global = 0, vy_global = 0, omega_global = 0;
+float vx_local = 0, vy_local = 0, omega_local = 0;
+
 float vx_control 		= 0;
 float vy_control  		= 0;
 float omega_control 	= 0;
+float vx_control_global = 0;
+float vy_control_global = 0;
 float V 				= 0;
 float v_send 			= 0;
 float yaw_send 			= 0;
@@ -254,6 +256,23 @@ void user_init()
 	HAL_Delay(200);
 }
 
+static inline void world_to_body(float vx_w, float vy_w, float yaw,
+                                 float *vx_b, float *vy_b)
+{
+    float c = cosf(yaw), s = sinf(yaw);
+    *vx_b =  c*vx_w + s*vy_w;
+    *vy_b = -s*vx_w + c*vy_w;
+}
+
+// body -> world
+static inline void body_to_world(float vx_b, float vy_b, float yaw,
+                                 float *vx_w, float *vy_w)
+{
+    float c = cosf(yaw), s = sinf(yaw);
+    *vx_w = c*vx_b - s*vy_b;
+    *vy_w = s*vx_b + c*vy_b;
+}
+
 void update_encoder_speed(void)
 {
 	for (int i = 0; i < 4; i++)
@@ -292,7 +311,7 @@ void update_encoder_speed(void)
 	    encoder_past[i] = encoder_current[i];
 
 	    speed_rps[i] = (float) delta_encoder[i] / PPR / DT;
-	    if (i == 2)
+	    if (i != 0)
 	    {
 	    	speed_rps[i] = -speed_rps[i];
 	    }
@@ -302,9 +321,10 @@ void update_encoder_speed(void)
 
     vx_control = (speed_rps[0] + speed_rps[1] + speed_rps[2] + speed_rps[3]) * r / 4.0;
     vy_control = (-speed_rps[0] + speed_rps[1] + speed_rps[2] - speed_rps[3]) * r / 4.0;
+    body_to_world(vx_control, vy_control, yaw_deg, &vx_control_global, &vy_control_global);
     // theta_dot =  (-SpeedMeasured[0] + SpeedMeasured[1] - SpeedMeasured[2] + SpeedMeasured[3]) * r / (4.0 * (L1 + L2));
     // toán vận tốc tổng hợp của xe (vận tốc theo hướng tổng hợp)
-    v_send = sqrt(vx_control * vx_control + vy_control * vy_control);
+    v_send = sqrt(vx_control_global * vx_control_global + vy_control_global * vy_control_global);
 }
 
 void read_IMU(void)
@@ -379,10 +399,12 @@ void check_uart_command(void)
 
 void parse_uart_line(char *line)
 {
-	vx = 0;
-	vy = 0;
-	omega = 0;
-    float vx_global = 0, vy_global = 0, omega_global = 0;
+	vx_local     = 0;
+	vy_local     = 0;
+	omega_local  = 0;
+	vx_global    = 0;
+	vy_global    = 0;
+	omega_global = 0;
 
     char *vxStr = strtok(line, " ");
     char *vyStr = strtok(NULL, " ");
@@ -390,17 +412,18 @@ void parse_uart_line(char *line)
 
     if (vxStr && vyStr && omegaStr)
     {
-        vx_global = atof(vxStr);
-        vy_global = atof(vyStr);
-        omega_global = atof(omegaStr);
+//        vx_global = atof(vxStr);
+//        vy_global = atof(vyStr);
+//        omega_global = atof(omegaStr);
+    	vx_local = atof(vxStr);
+    	vy_local = atof(vyStr);
+    	omega_local = atof(omegaStr);
 
-        vx = vx_global;
-        vy = vy_global;
-        omega = omega_global;
-
-        started = 1;
+//        world_to_body(vx_global, vy_global, M_PI/2, &vx_local, &vy_local);
+//        omega_local = omega_global;
 //        move(vx, vy, omega);
-        move(vx, vy, omega);
+
+        move(vx_local, vy_local, omega_local);
     }
 
     manual_mode = 1;
@@ -409,10 +432,10 @@ void parse_uart_line(char *line)
 
 void move(float vx, float vy, float omega)
 {
-    float v1 = (vx - vy - (L1 + L2) * omega) / r;
-    float v2 = (vx + vy + (L1 + L2) * omega) / r;
-    float v3 = (vx + vy - (L1 + L2) * omega) / r;
-    float v4 = (vx - vy + (L1 + L2) * omega) / r;
+    v1 = (vx - vy - (L1 + L2) * omega) / r;
+    v2 = (vx + vy + (L1 + L2) * omega) / r;
+    v3 = (vx + vy - (L1 + L2) * omega) / r;
+    v4 = (vx - vy + (L1 + L2) * omega) / r;
 
     float max_speed = fmaxf(fmaxf(fabsf(v1), fabsf(v2)), fmaxf(fabsf(v3), fabsf(v4)));
     if (max_speed > MAX_SPEED)
@@ -437,7 +460,11 @@ void driveMotor(int idx, float speed)
 
     float abs_speed = fabsf(speed);
 
-    pwm_value[idx] = (uint32_t) (abs_speed * 100 / 3);
+    pwm_value[idx] = (uint32_t) (abs_speed * 100 / 3) * 1.2;
+    if (pwm_value[idx] > PWM_LIMIT)
+    {
+    	pwm_value[idx] = PWM_LIMIT;
+    }
     // Điều khiển chiều
     HAL_GPIO_WritePin(in1_port[idx], in1_pin[idx], forward ? GPIO_PIN_SET : GPIO_PIN_RESET);
     HAL_GPIO_WritePin(in2_port[idx], in2_pin[idx], forward ? GPIO_PIN_RESET : GPIO_PIN_SET);
@@ -583,37 +610,37 @@ int main(void)
 //		}
 //		HAL_Delay(3000);
 
-//		move(0.4, 0, 0);
+//		move(0.2, 0, 0);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
 //		HAL_Delay(3000);
 //
-//		move(-0.4, 0, 0);
+//		move(-0.2, 0, 0);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
 //		HAL_Delay(3000);
 //
-//		move(0, 5, 0);
+//		move(0, 0.2, 0);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
 //		HAL_Delay(3000);
 //
-//		move(0, -5, 0);
+//		move(0, -0.2, 0);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
 //		HAL_Delay(3000);
 //
-//		move(0, 0, 20);
+//		move(0, 0, 0.8);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
 //		HAL_Delay(3000);
 //
-//		move(0, 0, -20);
+//		move(0, 0, -0.8);
 //		HAL_Delay(3000);
 //
 //		move(0, 0, 0);
