@@ -55,7 +55,7 @@ class SerialCommNode:
                         V = float(parts[0])
                         yaw = float(parts[1])
                         theta_dot = float(parts[2])
-                        # print(f"Received V: {V}; yaw: {yaw};  theta_dot: {theta_dot}\n")
+                        print(f"Received V: {V}; yaw: {yaw};  theta_dot: {theta_dot}\n")
                         msg = Float32MultiArray()
                         msg.data = [V, yaw, theta_dot]
                         self.vel_pub.publish(msg)

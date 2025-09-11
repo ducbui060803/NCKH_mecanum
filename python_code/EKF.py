@@ -16,7 +16,7 @@ start_time = time.time()
 v = 0
 pre_v = 0
 acc_prev = 0
-yaw = 0
+yaw_dot = 0
 imu_yaw = 0
 PORT = 5005
 
@@ -142,12 +142,12 @@ try:
     pose_pub = rospy.Publisher('/expected_pose', Float32MultiArray, queue_size=10)
 
     def uart_callback(msg):
-        global v, imu_yaw, yaw
+        global v, imu_yaw, yaw_dot
         if len(msg.data) >= 2:
             v = msg.data[0]
             imu_yaw = msg.data[1]
-            yaw = msg.data[2]
-            # rospy.loginfo(f"Received from UART: v = {v}, yaw_dot = {yaw_dot}")
+            yaw_dot = msg.data[2]
+
         else:
             rospy.logwarn("UART callback received invalid data!")
 
@@ -166,12 +166,11 @@ try:
 
     while not rospy.is_shutdown():
         # Nhập dữ liệu từ cảm biến
-        print(f"Received: V={v}, yaw={yaw}")
         try:
             data, _ = sock.recvfrom(2048)
             x, y, phi = map(float, data.decode().split(","))
 
-            print(f"Received: x={x}, y={y}, phi={phi}")
+            # print(f"Received: x={x}, y={y}, phi={phi}")
 
         except Exception as e:
             print(f"Error processing data: {e}")
@@ -179,15 +178,17 @@ try:
         # Nhập dữ liệu đo lường từ Camera + ArUco Marker
         x_meas = x
         y_meas = y
-        imu_yaw = np.abs(imu_yaw)
+        # imu_yaw = np.abs(imu_yaw)
         if (phi < 0):
             imu_yaw = -imu_yaw
-        print(f"imu_yaw: {imu_yaw}")
-        print(f"phi:     {phi}")
-        phi_meas = (0.4*phi + 0.6*imu_yaw)  
+        # print(f"imu_yaw: {imu_yaw}")
+        # print(f"phi:     {phi}")
+        # phi_meas = (0.4*phi + 0.6*imu_yaw)  
+        phi_meas = (0.2*phi + 0.8*1.57) 
+        # Vector điều khiển và đo lường
+        u_t = np.array([v , yaw_dot])
 
-        # Vector điều khiển và đo lườn  g
-        u_t = np.array([v , yaw])
+        # Chuẩn hóa góc phi về [-180:180]
         phi_meas = np.arctan2(np.sin(phi_meas), np.cos(phi_meas))
         z_t = np.array([[x_meas], [y_meas], [phi_meas]])
 
@@ -198,7 +199,7 @@ try:
         # Lấy trạng thái ước lượng hiện tại
         state = ekf.get_state().flatten()
         pre_v = v
-        print(f"Trạng thái ước lượng: x = {state[0]:.5f}, y = {state[1]:.5f}, phi = {state[2]:.5f}, v = {state[3]:.5f}")
+        # print(f"Trạng thái ước lượng: x = {state[0]:.5f}, y = {state[1]:.5f}, phi = {state[2]:.5f}, v = {state[3]:.5f}")
         
         # state[0] = x_meas = x
         # state[1] = y_meas 

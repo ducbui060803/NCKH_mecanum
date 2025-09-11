@@ -299,8 +299,8 @@ class BacksteppingController:
         # self.k1 = 15
         # self.k2 = 0.8
 
-        self.k1 = 4
-        self.k2 = 0.1
+        self.k1 = 8
+        self.k2 = 8
         self.plot_initialized = False
 
         # Robot state
@@ -405,8 +405,8 @@ class BacksteppingController:
         # ============================
         # 2. Errors
         # ============================
-        self.x = 0
-        self.yaw = np.pi/2
+        # self.x = 0
+        # self.yaw = np.pi/2
         e1 = np.array([self.x_d - self.x, self.y_d - self.y, self.yaw_d - self.yaw])
         e1[2] = wrap_to_pi(e1[2])  # Gói góc sai số về [-pi, pi]
 
@@ -448,6 +448,9 @@ class BacksteppingController:
         x_next, y_next, theta_next, vx_next, vy_next, wz_next = robot_dynamics(u,[self.x_dot, self.y_dot, self.yaw_dot],[self.x, self.y, self.yaw],Ts=0.01)
         # Publish command
         cmd = Twist()
+        # vx_next = 0
+        # vy_next = 0
+        # wz_next = 0
         cmd.linear.x = vx_next
         cmd.linear.y = vy_next
         cmd.angular.z = wz_next
@@ -484,9 +487,9 @@ def plot_paths(desired, actual, mearsure):
     # plt.plot(desired[:, 0], desired[:, 1], 'r-', linewidth = 0.5, label='Desired Path')
     # plt.plot(mearsure[:, 0], mearsure[:, 1], 'b-', linewidth = 1, label='Mearsure - Aruko Path')
     # plt.plot(actual[:, 0], actual[:, 1], 'g-', linewidth = 0.6, label='Actual - xEKF Path')
-    plt.plot(desired[:, 0], desired[:, 1], 'r-', linewidth = 0.5, label='Desired Path')
-    # plt.plot(mearsure[:, 0], mearsure[:, 1], 'b-', linewidth = 1, label='Mearsure - Aruko Path')
-    plt.plot(actual[:, 0], actual[:, 1], 'g-', linewidth = 0.6, label='Actual - xEKF Path')
+    plt.plot(desired[:, 0], desired[:, 1], 'b-', linewidth = 0.8, label='Desired Path')
+    plt.plot(mearsure[:, 0], mearsure[:, 1], 'gx', markersize=2, label='Mearsure - xEKF Path')
+    plt.plot(actual[:, 0], actual[:, 1], 'ro', markersize=2, label='Actual - Aruko Path')
 
     # plt.scatter(mearsure[:, 0], mearsure[:, 1], c='b--', s=5, label='Mearsure Path')  # Dấu chấm nhỏ
     # plt.scatter(actual[:, 0], actual[:, 1], c='g', s=3, label='Actual Path')  # Dấu chấm nhỏ
@@ -508,39 +511,6 @@ def plot_position_vs_reference(controller):
     angle_desired = [pos[2] for pos in controller.desired_path]
     plt.figure(figsize=(8, 6))
 
-    # # Plot x
-    # plt.subplot(3, 1, 1)
-    # plt.plot(time_stamps, x_actual, label="x_actual", color='blue', linewidth = 0.5)
-    # plt.plot(time_stamps, x_desired, label="x_desired", color='red', linestyle='--')
-    # plt.ylabel("X Position (m)")
-    # plt.title("X Position vs X Reference")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.gca().yaxis.set_major_locator(MultipleLocator(0.2))  # <- Chia mỗi 0.5 m
-
-    # # Plot y
-    # plt.subplot(3, 1, 2)
-    # plt.plot(time_stamps, y_actual, label="y_actual", color='green', linewidth = 0.5)
-    # plt.plot(time_stamps, y_desired, label="y_desired", color='orange', linestyle='--')
-    # plt.xlabel("Time (s)")
-    # plt.ylabel("Y Position (m)")
-    # plt.title("Y Position vs Y Reference")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.gca().yaxis.set_major_locator(MultipleLocator(0.2))  # <- Chia mỗi 0.5 m
-
-    #  # Plot angle
-    # plt.subplot(3, 1, 3)
-    # plt.plot(time_stamps, angle_actual, label="angle_actual", color='purple', linewidth = 0.5)
-    # plt.plot(time_stamps, angle_desired, label="angle_desired", color='brown', linestyle='--')
-    # plt.xlabel("Time (s)")
-    # plt.ylabel("Angle (rad)")
-    # plt.title("Angle vs Angle Reference")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.gca().yaxis.set_major_locator(MultipleLocator(0.5))  # <- Chia mỗi 0.5 rad
-    # plt.tight_layout()
-    # plt.show()
     # --- Plot X ---
     plt.figure(figsize=(8, 4))
     plt.plot(time_stamps, x_actual, label="x_actual", color='blue', linewidth=0.5)
@@ -549,7 +519,7 @@ def plot_position_vs_reference(controller):
     plt.title("X Position vs X Reference")
     plt.legend()
     plt.grid(True)
-    plt.gca().yaxis.set_major_locator(MultipleLocator(0.2))  # 0.2 m mỗi vạch chia
+    # plt.gca().yaxis.set_major_locator(MultipleLocator(0.2))  # 0.2 m mỗi vạch chia
     plt.xlabel("Time (s)")
     plt.tight_layout()
 
@@ -561,7 +531,7 @@ def plot_position_vs_reference(controller):
     plt.title("Y Position vs Y Reference")
     plt.legend()
     plt.grid(True)
-    plt.gca().yaxis.set_major_locator(MultipleLocator(0.2))
+    # plt.gca().yaxis.set_major_locator(MultipleLocator(0.2))
     plt.xlabel("Time (s)")
     plt.tight_layout()
 
@@ -573,7 +543,7 @@ def plot_position_vs_reference(controller):
     plt.title("Angle vs Angle Reference")
     plt.legend()
     plt.grid(True)
-    plt.gca().yaxis.set_major_locator(MultipleLocator(0.02))  # 0.01 rad mỗi vạch chia
+    # plt.gca().yaxis.set_major_locator(MultipleLocator(0.02))  # 0.01 rad mỗi vạch chia
     plt.xlabel("Time (s)")
     plt.tight_layout()
 
