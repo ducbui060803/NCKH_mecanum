@@ -86,6 +86,8 @@ def normalize_angle_deg(angle):
 cap = cv2.VideoCapture(0)  # Có thể thay bằng URL camera IP
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+# cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+# cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 if not cap.isOpened():
     print("Error: Could not open video stream")
     exit()
@@ -93,7 +95,7 @@ if not cap.isOpened():
 # --- ArUco ---
 aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
 parameters = aruco.DetectorParameters()
-marker_size = 0.13  
+marker_size = 0.145 
 
 # --- Marker map ---
 id_12 = [-1,  -1,  -math.pi]
@@ -107,8 +109,8 @@ id_5  = [0.4,  1.4,  0]
 id_4  = [-0.4, 1.4,  math.pi/2]
 id_3  = [-1,   1,    math.pi/2]
 id_2  = [0,    0,    math.pi/2]
-id_1  = [1, 2,  math.pi]
-id_0  = [0,  2,    math.pi]
+id_1  = [1, 2,  math.pi/2]
+id_0  = [0,  1,    math.pi/2]
 
 marker_start = [id_0, id_1, id_2, id_3, id_4, id_5, id_6, id_7, id_8, id_9, id_10, id_11, id_12]
 
@@ -117,6 +119,29 @@ pre_x, pre_y, pre_angle = 0, -1, 180
 pose_buffer = []
 alpha, a_a = 0.5, 0.5
 filtered_x = filtered_y = filtered_angle = None
+
+class SimpleKalman:
+    def __init__(self, q=0.01, r=0.1):
+        self.q = q  # process noise
+        self.r = r  # measurement noise
+        self.p = 1.0
+        self.x = 0.0
+
+    def update(self, measurement):
+        # predict
+        self.p += self.q
+        # kalman gain
+        k = self.p / (self.p + self.r)
+        # update estimate
+        self.x += k * (measurement - self.x)
+        # update error covariance
+        self.p *= (1 - k)
+        return self.x
+
+# --- tạo bộ lọc cho x,y,phi
+kf_x = SimpleKalman()
+kf_y = SimpleKalman()
+kf_phi = SimpleKalman()
 
 def LowPassFilter(x, y, angle):
     global filtered_x, filtered_y, filtered_angle, alpha, a_a
@@ -182,12 +207,15 @@ while True:
             phi_est = np.sum(weights * np.array([p[2] for p in all_marker]))
 
             x_filt, y_filt, phi_filt = LowPassFilter(x_est, y_est, phi_est)
-            x_smooth, y_smooth, phi_smooth = smooth_pose(x_filt, y_filt, phi_filt)
+            # x_smooth, y_smooth, phi_smooth = smooth_pose(x_filt, y_filt, phi_filt)
+            x_kf = kf_x.update(x_filt)
+            y_kf = kf_y.update(y_filt)
+            phi_kf = kf_phi.update(phi_filt)
 
             pose = {
-                'x': x_smooth,
-                'y': y_smooth,
-                'phi': phi_smooth * math.pi / 180
+                'x': x_kf,
+                'y': y_kf,
+                'phi': phi_kf * math.pi / 180
             }
 
             send_pose(pose['x'], pose['y'], pose['phi'])
