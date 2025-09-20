@@ -21,15 +21,16 @@ input_data_queue = queue.LifoQueue()
 m = 6           # Khối lượng robot (kg)
 I_z = 0.22 + 0.02328     # Mô-men quán tính quanh trục z (Xe + banh xe) (kg.m^2)
 r = 0.035        # Bán kính bánh xe (m)
-L1 = 0.11       # Khoảng cách từ tâm đến bánh xe (m)
-L2 = 0.1       # Khoảng cách từ tâm đến bánh xe (m)
+L1 = 0       # Khoảng cách từ trọng tâm robot đến tâm robot theo chiều trục x (m)
+L2 = 0       # Khoảng cách từ trọng tâm robot đến tâm robot theo chiều trục y (m)
 
-# Ma trận quán tính
+# Ma trận quán tính - Đơn giản hóa mô hình khi L1 = L2 = 0, trọng tâm trùng tâm robot
 D = lambda: np.array([
     [m,         0,          -m * L1],
     [0,         m,          m * L2],
     [-m * L1,   m * L2,     I_z + m * (L2**2 + L1**2)]
 ]) 
+
 alpha = 0.7
 a_a = 0.3
 filtered_x = None
@@ -50,44 +51,6 @@ def LowPassFilter(x, y, angle):
 def wrap_to_pi(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
 
-# def generate_capsule_path(radius, height, points_per_arc=50, points_per_line=50):
-#     # Góc cho nửa tròn
-#     yaw_top = np.linspace(np.pi, 0, points_per_arc)        # từ trái sang phải (nửa trên)
-#     yaw_bottom = np.linspace(0, -np.pi, points_per_arc)    # từ phải sang trái (nửa dưới)
-
-#     # Nửa tròn trên (trái -> phải)
-#     top_arc_x = radius * np.cos(yaw_top)
-#     top_arc_y = radius * np.sin(yaw_top) + height / 2
-
-#     # Đoạn thẳng bên phải (trên -> dưới)
-#     # right_line_x = np.linspace(radius, radius, points_per_line)
-#     # right_line_y = np.linspace(height / 2, -height / 2, points_per_line)
-
-#     # # Nửa tròn dưới (phải -> trái)
-#     # bottom_arc_x = radius * np.cos(yaw_bottom)
-#     # bottom_arc_y = radius * np.sin(yaw_bottom) - height / 2
-
-#     # # Đoạn thẳng bên trái (dưới -> trên)
-#     # left_line_x = np.linspace(-radius, -radius, points_per_line)
-#     # left_line_y = np.linspace(-height / 2, height / 2, points_per_line)
-
-#     # Ghép các đoạn lại theo thứ tự liên tục
-#     x_traject  = np.concatenate([top_arc_x])
-#     y_traject  = np.concatenate([top_arc_y])
-    
-#     # x_traject  = np.concatenate([left_line_x])
-#     # y_traject  = np.concatenate([left_line_y])
-#         # Tính góc theo trục X cho mỗi điểm (trừ điểm đầu và cuối)
-#     angles_traject = []
-#     for i in range(1, len(x_traject) - 1):
-#         dx = x_traject[i + 1] - x_traject[i - 1]
-#         dy = y_traject[i + 1] - y_traject[i - 1]
-#         angle = np.arctan2(dy, dx)  # Tính góc theo trục X
-#         angles_traject.append(angle)
-
-#     # Thêm góc cho điểm đầu và cuối (lấy từ điểm tiếp theo và trước đó)
-#     angles_traject = [angles_traject[0]] + angles_traject + [angles_traject[-1]]
-#     return x_traject, y_traject, angles_traject
 
 def generate_path(path_type="circle", length=1.0, radius=1.0, points=100, angle_fixed=np.pi/2, T=10.0):
     """
@@ -185,8 +148,8 @@ def generate_path(path_type="circle", length=1.0, radius=1.0, points=100, angle_
 def robot_dynamics(u, state, pose, Ts=0.01):
     # Thông số hệ thống
     m = 6
-    L1 = 0.1
-    L2 = 0.1
+    L1 = 0 # center of gravity to center of robot along x-axis
+    L2 = 0 # center of gravity to center of robot along x-axis
     Iz = 0.22 + 0.02328
 
     # Giải nạp input
@@ -194,14 +157,14 @@ def robot_dynamics(u, state, pose, Ts=0.01):
     vx, vy, wz = state
     x, y, theta = pose
 
-    # Ma trận quán tính
+    # Ma trận quán tính -- Đơn giản hóa mô hình khi L1 = L2 = 0, trọng tâm trùng tâm robot
     D = np.array([
-        [m,   0,   -m*L1],
-        [0,   m,    m*L2],
-        [-m*L1, m*L2, Iz + m*(L1**2 + L2**2)]
+        [m,         0,      -m*L1],
+        [0,         m,      m*L2],
+        [-m*L1,  m*L2,      Iz + m*(L1**2 + L2**2)]
     ])
 
-    # Nhiễu
+    # Nhiễu -- Đơn giản hóa mô hình khi L1 = L2 = 0, trọng tâm trùng tâm robot
     n_zeta = np.array([
         -m * (vy + L2 * wz),
          m * (vx - L1 * wz),
@@ -228,28 +191,15 @@ def robot_dynamics(u, state, pose, Ts=0.01):
     return np.array([x_next, y_next, theta_next, vx_next, vy_next, wz_next])
     
 class BacksteppingController:
-    # Vector n(ζ)
-    def n_zeta(self, u, v, r):
+    # Vector n(ζ) / u = vx, v = vy, r = wz in body frame
+    # Đơn giản hóa mô hình khi L1 = L2 = 0, trọng tâm trùng tâm robot
+    def n_zeta(self, u, v, r): 
         return np.array([
             -m * (v + L2 * r),
             m * (u - L1 * r),
             m * r * (L2 * u + L1 * v)
         ])
-    def stop_robot(self):
-        cmd = Twist()
-        cmd.linear.x = 0
-        cmd.linear.y = 0
-        cmd.angular.z = 0
-        self.cmd_pub.publish(cmd)
-
-    # def keyboard_listener(self):
-    #     keyboard.wait('q')
-    #     rospy.loginfo("Stopping robot due to 'q' key press.")
-    #     self.running = False
-    #     for i in range(0,3):    
-    #         self.stop_robot()
-    #     rospy.signal_shutdown("Stopped by user.")
-
+        
     def odom_callback(self, msg):
         """ Update robot's state from Float32MultiArray. """
         # Lấy giá trị từ message Float32MultiArray
@@ -257,7 +207,7 @@ class BacksteppingController:
             self.x = msg.data[0]  # pose['x']
             self.y = msg.data[1]  # pose['y']
             self.yaw = msg.data[2]  # pose['phi']
-            self.v = msg.data[3]
+            self.v = msg.data[3]    # v = sqrt(vx^2 + vy^2) from EKF measure from encoder data
             self.pose_x = msg.data[4]
             self.pose_y = msg.data[5]
             self.pose_phi = msg.data[6]
@@ -278,8 +228,8 @@ class BacksteppingController:
     def uart_callback(self, msg):
         if (self.trajectory_index < self.N):
             self.yaw_dot = msg.data[2]
-        else:
-            self.yaw_dot = 0
+        # else:
+        #     self.yaw_dot = 0
 
     def __init__(self):
         rospy.init_node('backstepping_mecanum_controller', anonymous=True)
@@ -346,13 +296,7 @@ class BacksteppingController:
         self.desired_path = [] 
         self.mearsure_path = []
         self.u_history = []
-        # Stop variable
-        # self.running = True
-        # threading.Thread(target=self.keyboard_listener, daemon=True).start()
-        # Tạo quỹ đạo tham chiếu (linear interpolation)
-        # self.x_traj = np.linspace( -0.35,  -0.35, self.N)  # x không đổi
-        # self.y_traj = np.linspace(-1.4, 0, self.N) # y từ -1 lên 0
-        # self.yaw_traj = np.linspace(np.pi/2, np.pi/2, self.N)  # không đổi hướng
+
         self.x_traj = [pt[0] for pt in self.path_points]
         self.y_traj = [pt[1] for pt in self.path_points]
         self.yaw_traj = [pt[2] for pt in self.path_points]
@@ -389,56 +333,57 @@ class BacksteppingController:
 
     def control_loop(self, event):
         """ Apply backstepping control. """
-
-        # ============================
-        # 1. Desired velocities (x_dot_d, y_dot_d, yaw_dot_d)
-        # ============================
-        # self.x_dot_d = -r * self.omega * np.sin(self.yaw_d * event.current_real.to_sec())
-        # self.y_dot_d =  r * self.omega * np.cos(self.yaw_d * event.current_real.to_sec())
-        # self.yaw_dot_d = self.omega
-
-        # Desired accelerations (cần nếu tính zeta_dot_d)
-        # self.x_ddot_d = -r * self.omega**2 * np.cos(self.yaw_d * event.current_real.to_sec())
-        # self.y_ddot_d = -r * self.omega**2 * np.sin(self.yaw_d * event.current_real.to_sec())
-        # self.yaw_ddot_d = 0.0
-
-        # ============================
-        # 2. Errors
-        # ============================
-        # self.x = 0
-        # self.yaw = np.pi/2
+        
+        # e1 is position error in global frame
         e1 = np.array([self.x_d - self.x, self.y_d - self.y, self.yaw_d - self.yaw])
         e1[2] = wrap_to_pi(e1[2])  # Gói góc sai số về [-pi, pi]
 
-        # Jacobian
+        # J is Jacobian matrix to convert from body to global frame
         J = np.array([
             [np.cos(self.yaw), -np.sin(self.yaw), 0],
             [np.sin(self.yaw),  np.cos(self.yaw), 0],
             [0,                   0,                  1] ])
+        
+        # J_inv is matrix to convert from global to body frame
         J_inv = np.linalg.pinv(J)
 
-        # Reference velocity (zeta_d)
+        # eta_dot_d is the desired velocity in the global frame
         eta_dot_d = np.array([self.x_dot_d, self.y_dot_d, self.yaw_dot_d])
+        
+        # Convert desired velocity from global to body frame
+        # eta_dot_d is the desired velocity from trajectory + k1*e1 (position error) in global frame
         zeta_d = np.dot(J_inv, eta_dot_d + self.k1 * e1)
 
-        # Velocity error
-        e2 = zeta_d - np.array([self.x_dot, self.y_dot, self.yaw_dot])
+        # Velocity error on body frame
+        e2 = zeta_d - np.array([self.x_dot, self.y_dot, self.yaw_dot]) # x_dot, y_dot, yaw_dot should be in body frame
 
         # ============================
         # 3. Derivatives
         # ============================
+        
+        # e1_dot is the derivative of position error in global frame
         e1_dot = np.array([
             self.x_dot_d - self.x_dot,
             self.y_dot_d - self.y_dot,
             self.yaw_dot_d - self.yaw_dot
-        ])
+        ]) # x_dot, y_dot, yaw_dot should be in global frame
 
+        # zeta_dot_d is the desired acceleration in body frame
+        # x_ddot_d, y_ddot_d, yaw_ddot_d should be in global frame
+        # e1_dot is in global frame
         zeta_dot_d = np.dot(J_inv, np.array([
             self.x_ddot_d,
             self.y_ddot_d,
             self.yaw_ddot_d
-        ]) + self.k1 * e1_dot)
+        ]) + self.k1 * e1_dot) 
 
+
+        # D is the inertia matrix
+        # k2 is gain for velocity error
+        # e2 is velocity error in body frame
+        # zeta_dot_d is desired acceleration in body frame
+        
+        
         u = np.dot(D(), (self.k2 * e2 + zeta_dot_d + np.dot(J.T, e1))) + self.n_zeta(self.x_dot, self.y_dot, self.yaw_dot)
 
         # Saturation (optional)

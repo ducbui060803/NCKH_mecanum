@@ -13,9 +13,7 @@ v_estimated_list = []
 time_stamps = []
 start_time = time.time()
 
-
-
-v = 0
+v_local = 0
 pre_v = 0
 acc_prev = 0
 yaw_dot = 0
@@ -24,13 +22,13 @@ PORT = 5005
 
 def publish_pose(pose):
     position = Float32MultiArray()
-    position.data = [pose['x'], pose['y'], pose['phi'], pose['v'],pose['pose_x'], pose['pose_y'], pose['pose_phi']]  # Gửi 4 giá trị
+    position.data = [pose['x'], pose['y'], pose['yaw'], pose['v_local'],pose['pose_x'], pose['pose_y'], pose['pose_yaw']]  # Gửi 4 giá trị
     pose_pub.publish(position)
 
 def plot_velocity_compare():
     plt.figure(figsize=(10, 6))
-    plt.plot(time_stamps, v_measured_list, 'r-', label="V measured (UART)", linewidth=0.8)
-    plt.plot(time_stamps, v_estimated_list, 'b--', label="V estimated (EKF)", linewidth=0.8)
+    plt.plot(time_stamps, v_measured_list, 'r-', label="v_local measured (UART)", linewidth=0.8)
+    plt.plot(time_stamps, v_estimated_list, 'b--', label="v_local estimated (EKF)", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("Velocity (m/s)")
     plt.title("Comparison of Measured vs Estimated Velocity")
@@ -38,17 +36,19 @@ def plot_velocity_compare():
     plt.grid(True)
     plt.show()
 
+def wrap_to_pi(angle):
+    return np.arctan2(np.sin(angle), np.cos(angle))
 class EKF:
     def __init__(self, dt, Q_fixed, R_fixed):
         """ Khởi tạo EKF với ma trận nhiễu Q và R cố định """
         self.dt = dt  # Bước thời gian (delta_t)
 
-        # Trạng thái hệ thống x_t = [x, y, phi, v]
+        # Trạng thái hệ thống x_t = [x, y, yaw, v_local]
         self.x_t = np.array([
                             [0.0],         # x
                             [0.0],        # y
-                            [np.pi/2 ],   # phi
-                            [0.0]          # v
+                            [np.pi/2 ],   # yaw
+                            [0.0]          # v_local
                         ])              
 
         # Ma trận hiệp phương sai trạng thái P_t
@@ -64,70 +64,96 @@ class EKF:
         self.H_t = np.array([
             [1, 0, 0, 0],  # X đo từ camera
             [0, 1, 0, 0],  # Y đo từ camera
-            [0, 0, 1, 0]   # Phi đo từ camera
+            [0, 0, 1, 0]   # yaw đo từ camera
         ])
     
     def predict(self, u_t):
-        global pre_v
-        global acc_prev
-        """ Bước dự đoán trạng thái với đầu vào điều khiển u_t = [omega, v] """
-        phi_t = self.x_t[2, 0]  # Góc quay hiện tại
-        v_t = self.x_t[3, 0]    # Vận tốc hiện tại
+        """
+        Predict step.
+        u_t: [omega_t, delta_v_t]   -- omega from IMU, delta_v from encoder (v_{t} - v_{t-1})
+        Model:
+          x_{t+1} = x_t + dt * v_t * cos(yaw_t)
+          y_{t+1} = y_t + dt * v_t * sin(yaw_t)
+          yaw_{t+1} = yaw_t + dt * omega_t
+          v_{t+1} = v_t + delta_v_t
+        """
+        # unpack
+        omega = float(u_t[0])
+        delta_v = float(u_t[1])
 
-        # Ma trận Jacobian F_t
+        x = float(self.x_t[0,0])
+        y = float(self.x_t[1,0])
+        yaw = float(self.x_t[2,0])
+        v = float(self.x_t[3,0])
+
+        # --- Nonlinear predict (propagate mean) ---
+        dx = v * np.cos(yaw) * self.dt
+        dy = v * np.sin(yaw) * self.dt
+        dyaw = omega * self.dt
+        dv = delta_v  # increment in velocity (paper uses v_{t-1} + Δv)
+
+        # update state
+        self.x_t[0,0] = x + dx
+        self.x_t[1,0] = y + dy
+        self.x_t[2,0] = wrap_to_pi(yaw + dyaw)
+        self.x_t[3,0] = v + dv
+
+        # --- Jacobian F_t = df/dx ---
+        # partial derivatives evaluated at previous state (using v and yaw)
         F_t = np.array([
-            [1, 0, -self.dt * v_t * np.sin(phi_t), self.dt * np.cos(phi_t)],
-            [0, 1, self.dt * v_t * np.cos(phi_t), self.dt * np.sin(phi_t)],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
+            [1., 0., -self.dt * v * np.sin(yaw), self.dt * np.cos(yaw)],
+            [0., 1.,  self.dt * v * np.cos(yaw), self.dt * np.sin(yaw)],
+            [0., 0., 1., 0.],
+            [0., 0., 0., 1.]
         ])
-        acc = 0.8 * acc_prev + 0.2 * (u_t[0] - pre_v)
 
-        # Ma trận điều khiển B_t
-        B_t = np.array([
-                [np.cos(phi_t) * dt * u_t[0]],
-                [np.sin(phi_t) * dt * u_t[0]],
-                [u_t[1]],
-                # [u_t[0]-pre_v]
-                [acc]
-            ])
-        # print(f"v_truoc: {self.x_t[3]}")
-        # Dự đoán trạng thái mới
-        self.x_t = self.x_t + B_t  # x_t|t-1 = f(x_t-1, u_t)
-        # print(f"v_sau: {self.x_t[3]}")
+        # Optionally you can also compute B_t = df/du (control Jacobian) if needed
+        # B_t = [[0, dt*cos(yaw)],
+        #        [0, dt*sin(yaw)],
+        #        [dt, 0],
+        #        [0, 1]]
 
-        acc_prev = acc
-        self.P_t = F_t @ self.P_t @ F_t.T + self.Q_t  # Cập nhật ma trận hiệp phương sai P_t|t-1
-        # self.P_t = F_t @ self.P_t @ F_t.T  # Cập nhật ma trận hiệp phương sai P_t|t-1
+        # --- Covariance propagation ---
+        self.P_t = F_t @ self.P_t @ F_t.T + self.Q_t
 
-        self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
+    def update(self, z_t, H=None, R=None):
+        """
+        Update step with measurement z_t.
+        Default H assumes z = [x_meas, y_meas, yaw_meas].
+        If your measurement is different, pass H (matrix) and R (cov) accordingly.
+        z_t must be column vector shape (m,1) or 1D array length m.
+        """
+        # ensure z_t is column vector
+        z = np.array(z_t, dtype=float).reshape((-1,1))
 
-        # Predict state and covariance
-        # self.x_t = self.x_t + B_t @ u_t.reshape(-1, 1)
-        # self.P_t = F_t @ self.P_t @ F_t.T
+        # innovation
+        y_tilde = z - H @ self.x_t
 
-    def update(self, z_t):
-        """ Bước cập nhật trạng thái với đo lường mới z_t = [x_meas, y_meas, phi_meas] """
-        # Sai số đo lường (Innovation)
-        d_t = z_t - self.H_t @ self.x_t  
+        # if yaw measurement present, wrap its error to [-pi,pi]
+        # detect yaw row index in H: assume row with [0,0,1,0]
+        for i, row in enumerate(H):
+            if np.allclose(row, np.array([0.,0.,1.,0.])):
+                # wrap difference for yaw measurement
+                y_tilde[i,0] = wrap_to_pi(y_tilde[i,0])
 
-        # Ma trận hiệp phương sai của Innovation
-        S_t = self.H_t @ self.P_t @ self.H_t.T + self.R_t
+        # innovation covariance 
+        S = H @ self.P_t @ H.T + R
+        
+        # Calculate Kalman Gain
+        K = self.P_t @ H.T @ np.linalg.inv(S)
 
-        # Tính Kalman Gain
-        K_t = self.P_t @ self.H_t.T @ np.linalg.inv(S_t)
-        #print(f'K:    {K_t}')
-        # print(f'truoc K: {self.x_t[3]}')
-        # Cập nhật trạng thái
-        self.x_t = self.x_t + K_t @ d_t
-        # print(f'sau K: {self.x_t[3]}')
-        self.P_t = (np.eye(4) - K_t @ self.H_t) @ self.P_t
-        self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
+        # update state & covariance
+        self.x_t = self.x_t + K @ y_tilde
+        self.x_t[2,0] = wrap_to_pi(self.x_t[2,0])
+        self.P_t = (np.eye(self.P_t.shape[0]) - K @ H) @ self.P_t
 
 
     def get_state(self):
-        """ Trả về trạng thái hiện tại """
-        return self.x_t
+        return self.x_t.copy()
+
+    def get_cov(self):
+        return self.P_t.copy()
+
 
 # Khởi tạo EKF với ma trận Q và R cố định
 dt = 0.01
@@ -144,9 +170,9 @@ try:
     pose_pub = rospy.Publisher('/expected_pose', Float32MultiArray, queue_size=10)
 
     def uart_callback(msg):
-        global v, imu_yaw, yaw_dot
+        global v_local, imu_yaw, yaw_dot
         if len(msg.data) >= 2:
-            v = msg.data[0]
+            v_local = msg.data[0]
             imu_yaw = msg.data[1]
             yaw_dot = msg.data[2]
 
@@ -170,9 +196,9 @@ try:
         # Nhập dữ liệu từ cảm biến
         try:
             data, _ = sock.recvfrom(2048)
-            x, y, phi = map(float, data.decode().split(","))
+            x, y, yaw = map(float, data.decode().split(","))
 
-            # print(f"Received: x={x}, y={y}, phi={phi}")
+            # print(f"Received: x={x}, y={y}, yaw={yaw}")
 
         except Exception as e:
             print(f"Error processing data: {e}")
@@ -180,19 +206,17 @@ try:
         # Nhập dữ liệu đo lường từ Camera + ArUco Marker
         x_meas = x
         y_meas = y
-        # imu_yaw = np.abs(imu_yaw)
-        if (phi < 0):
-            imu_yaw = -imu_yaw
-        # print(f"imu_yaw: {imu_yaw}")
-        # print(f"phi:     {phi}")
-        # phi_meas = (0.4*phi + 0.6*imu_yaw)  
-        phi_meas = (0.2*phi + 0.8*1.57) 
-        # Vector điều khiển và đo lường
-        u_t = np.array([v , yaw_dot])
 
-        # Chuẩn hóa góc phi về [-180:180]
-        phi_meas = np.arctan2(np.sin(phi_meas), np.cos(phi_meas))
-        z_t = np.array([[x_meas], [y_meas], [phi_meas]])
+        if (yaw < 0):
+            imu_yaw = -imu_yaw
+
+        yaw_meas = (0.4*yaw + 0.6*imu_yaw) 
+        # Vector điều khiển và đo lường
+        u_t = np.array([v_local , yaw_dot])
+
+        # Chuẩn hóa góc yaw về [-180:180]
+        yaw_meas = np.arctan2(np.sin(yaw_meas), np.cos(yaw_meas))
+        z_t = np.array([[x_meas], [y_meas], [yaw_meas]])
 
         # Bước dự đoán và cập nhật
         ekf.predict(u_t)
@@ -200,34 +224,30 @@ try:
 
         # Lấy trạng thái ước lượng hiện tại
         state = ekf.get_state().flatten()
-        pre_v = v
-        # print(f"Trạng thái ước lượng: x = {state[0]:.5f}, y = {state[1]:.5f}, phi = {state[2]:.5f}, v = {state[3]:.5f}")
-        
-        # state[0] = x_meas = x
-        # state[1] = y_meas 
-        # state[2] = phi_meas 
+        pre_v = v_local
+
         # Store values in the pose dictionary
         pose = {}
         pose['x'] = state[0]
         pose['y'] = state[1]
-        pose['phi'] = state[2]
+        pose['yaw'] = state[2]
 
-        pose['v'] = state[3]
+        pose['v_local'] = state[3]
         pose['pose_x'] = x_meas
         pose['pose_y'] = y_meas
-        pose['pose_phi'] = phi_meas
-        position = (float(pose['x']), float(pose['y']), float(pose['phi']) ,float(pose['v']),float(pose['pose_x']),float(pose['pose_y']))
+        pose['pose_yaw'] = yaw_meas
+        position = (float(pose['x']), float(pose['y']), float(pose['yaw']) ,float(pose['v_local']),float(pose['pose_x']),float(pose['pose_y']))
         # time.sleep(0.01)
+        
         # Publish the position and yaw angle
         publish_pose(pose)
 
         # Lưu giá trị để plot
         now = time.time() - start_time
         time_stamps.append(now)
-        v_measured_list.append(v)         # v từ UART
-        v_estimated_list.append(state[3]) # v từ EKF
+        v_measured_list.append(v_local)         # v_local từ UART
+        v_estimated_list.append(state[3])       # v_local từ EKF
    
-        # rospy.loginfo(pose)
 
     plot_velocity_compare()
 except rospy.ROSInterruptException:

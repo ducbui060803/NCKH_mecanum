@@ -41,69 +41,40 @@ start_time = time.time()
 
 def plot_yaw_ekf():
     plt.figure(figsize=(10, 6))
+    plt.plot(time_stamp, yaw_desired_list, 'g--', label="yaw_desired", linewidth=0.8)
+    plt.plot(time_stamp, yaw_dist_list, 'r-', label="yaw_dist ", linewidth=0.8)
     plt.plot(time_stamp, yaw_ekf_list, 'b-', label="yaw_ekf ", linewidth=0.8)
-    plt.plot(time_stamp, yaw_desired_list, 'r--', label="yaw_desired", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("yaw (degree)")
-    plt.title("Comparison of yaw_ekf vs yaw_desired")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-    
-def plot_yaw_dist():
-    plt.figure(figsize=(10, 6))
-    plt.plot(time_stamp, yaw_dist_list, 'b-', label="yaw_dist ", linewidth=0.8)
-    plt.plot(time_stamp, yaw_desired_list, 'r--', label="yaw_desired", linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("yaw (degree)")
-    plt.title("Comparison of yaw_dist vs yaw_desired")
+    plt.title("Comparison of yaw_ekf vs yaw_dist")
     plt.legend()
     plt.grid(True)
     plt.show()
     
 def plot_x_ekf():
     plt.figure(figsize=(10, 6))
-    plt.plot(time_stamp, x_ekf_list, 'g-', label="x_ekf ", linewidth=0.8)
-    plt.plot(time_stamp, x_desired_list, 'r--', label="x_desired", linewidth=0.8)
+    plt.plot(time_stamp, x_desired_list, 'g--', label="x_desired", linewidth=0.8)
+    plt.plot(time_stamp, x_dist_list, 'r-', label="x_dist ", linewidth=0.8)
+    plt.plot(time_stamp, x_ekf_list, 'b-', label="x_ekf ", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("x (m)")
-    plt.title("Comparison of x_ekf vs x_desired")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-    
-def plot_x_dist():
-    plt.figure(figsize=(10, 6))
-    plt.plot(time_stamp, x_dist_list, 'g-', label="x_dist ", linewidth=0.8)
-    plt.plot(time_stamp, x_desired_list, 'r--', label="x_desired", linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("x(m)")
-    plt.title("Comparison of x_dist vs x_desired")
+    plt.title("Comparison of x_ekf vs x_dist")
     plt.legend()
     plt.grid(True)
     plt.show()
     
 def plot_y_ekf():
     plt.figure(figsize=(10, 6))
-    plt.plot(time_stamp, y_ekf_list, '-', color='purple', label="y_ekf ", linewidth=0.8)
-    plt.plot(time_stamp, y_desired_list, 'r--', label="y_desired", linewidth=0.8)
+    plt.plot(time_stamp, y_desired_list, 'g--', label="y_desired", linewidth=0.8)
+    plt.plot(time_stamp, y_dist_list, 'r-', label="y_dist ", linewidth=0.8)
+    plt.plot(time_stamp, y_ekf_list, 'b-', label="y_ekf ", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("y (m)")
     plt.title("Comparison of y_ekf vs y_desired")
     plt.legend()
     plt.grid(True)
     plt.show()
-    
-def plot_y_dist():
-    plt.figure(figsize=(10, 6))
-    plt.plot(time_stamp, y_dist_list, '-', color='purple', label="y_dist ", linewidth=0.8)
-    plt.plot(time_stamp, y_desired_list, 'r--', label="y_desired", linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("y (m)")
-    plt.title("Comparison of y_dist vs y_desired")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+
     
 # Quỹ đạo ground truth: đi thẳng theo x
 x_gt, y_gt, phi_gt, v_gt = [], [], [], []
@@ -129,18 +100,20 @@ def _wrap_angle(a):
     # normalize to [-pi, pi)
     return math.atan2(math.sin(a), math.cos(a))
 # --- Extended Kalman Filter ---
+def wrap_to_pi(angle):
+    # return np.arctan2(np.sin(angle), np.cos(angle))
+    return angle
 class EKF:
     def __init__(self, dt, Q_fixed, R_fixed):
         """ Khởi tạo EKF với ma trận nhiễu Q và R cố định """
         self.dt = dt  # Bước thời gian (delta_t)
 
-        # Trạng thái hệ thống x_t = [x, y, phi, v]
+        # Trạng thái hệ thống x_t = [x, y, yaw, v_local]
         self.x_t = np.array([
                             [0.0],         # x
                             [0.0],        # y
-                            # [np.pi/2 ],   # phi
-                            [0.0 ],
-                            [0.0]          # v
+                            [np.pi/2 ],   # yaw
+                            [0.0]          # v_local
                         ])              
 
         # Ma trận hiệp phương sai trạng thái P_t
@@ -156,70 +129,100 @@ class EKF:
         self.H_t = np.array([
             [1, 0, 0, 0],  # X đo từ camera
             [0, 1, 0, 0],  # Y đo từ camera
-            [0, 0, 1, 0]   # Phi đo từ camera
+            [0, 0, 1, 0]   # yaw đo từ camera
         ])
     
     def predict(self, u_t):
-        global pre_v
-        global acc_prev
-        """ Bước dự đoán trạng thái với đầu vào điều khiển u_t = [omega, v] """
-        yaw_t = self.x_t[2, 0]  # Góc quay hiện tại
-        v_t = self.x_t[3, 0]    # Vận tốc hiện tại
+        """
+        Predict step.
+        u_t: [omega_t, delta_v_t]   -- omega from IMU, delta_v from encoder (v_{t} - v_{t-1})
+        Model:
+          x_{t+1} = x_t + dt * v_t * cos(yaw_t)
+          y_{t+1} = y_t + dt * v_t * sin(yaw_t)
+          yaw_{t+1} = yaw_t + dt * omega_t
+          v_{t+1} = v_t + delta_v_t
+        """
+        # unpack
+        omega = float(u_t[0])
+        delta_v = float(u_t[1])
 
-        # Ma trận Jacobian F_t
+        x = float(self.x_t[0,0])
+        y = float(self.x_t[1,0])
+        yaw = float(self.x_t[2,0])
+        v = float(self.x_t[3,0])
+
+        # --- Nonlinear predict (propagate mean) ---
+        dx = v * np.cos(yaw) * self.dt
+        dy = v * np.sin(yaw) * self.dt
+        dyaw = omega * self.dt
+        dv = delta_v  # increment in velocity (paper uses v_{t-1} + Δv)
+
+        # update state
+        self.x_t[0,0] = x + dx
+        self.x_t[1,0] = y + dy
+        self.x_t[2,0] = wrap_to_pi(yaw + dyaw)
+        self.x_t[3,0] = v + dv
+
+        # --- Jacobian F_t = df/dx ---
+        # partial derivatives evaluated at previous state (using v and yaw)
         F_t = np.array([
-            [1, 0, -self.dt * v_t * np.sin(yaw_t), self.dt * np.cos(yaw_t)],
-            [0, 1, self.dt * v_t * np.cos(yaw_t), self.dt * np.sin(yaw_t)],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
+            [1., 0., -self.dt * v * np.sin(yaw), self.dt * np.cos(yaw)],
+            [0., 1.,  self.dt * v * np.cos(yaw), self.dt * np.sin(yaw)],
+            [0., 0., 1., 0.],
+            [0., 0., 0., 1.]
         ])
-        acc = 0.8 * acc_prev + 0.2 * (u_t[0] - pre_v)
-        # acc = 0 * acc_prev + 1 * (u_t[0] - pre_v)
-        # Ma trận điều khiển B_t
-        B_t = np.array([
-                [np.cos(yaw_t) * dt * u_t[0]],
-                [np.sin(yaw_t) * dt * u_t[0]],
-                [u_t[1]],
-                # [u_t[0]-pre_v]
-                # [acc]
-                [0.0]
-            ])
+
+        # Optionally you can also compute B_t = df/du (control Jacobian) if needed
+        # B_t = [[0, dt*cos(yaw)],
+        #        [0, dt*sin(yaw)],
+        #        [dt, 0],
+        #        [0, 1]]
+
+        # --- Covariance propagation ---
+        self.P_t = F_t @ self.P_t @ F_t.T + self.Q_t
+
+    def update(self, z_t, H=None, R=None):
+        """
+        Update step with measurement z_t.
+        Default H assumes z = [x_meas, y_meas, yaw_meas].
+        If your measurement is different, pass H (matrix) and R (cov) accordingly.
+        z_t must be column vector shape (m,1) or 1D array length m.
+        """
+        if H is None:
+            H = self.H_t
+        if R is None:
+            R = self.R_t
+        # ensure z_t is column vector
+        z = np.array(z_t, dtype=float).reshape((-1,1))
+
+        # innovation
+        y_tilde = z - H @ self.x_t
+
+        # if yaw measurement present, wrap its error to [-pi,pi]
+        # detect yaw row index in H: assume row with [0,0,1,0]
+        for i, row in enumerate(H):
+            if np.allclose(row, np.array([0.,0.,1.,0.])):
+                # wrap difference for yaw measurement
+                y_tilde[i,0] = wrap_to_pi(y_tilde[i,0])
+
+        # innovation covariance 
+        S = H @ self.P_t @ H.T + R
         
-        # Dự đoán trạng thái mới
-        self.x_t = self.x_t + B_t  # x_t|t-1 = f(x_t-1, u_t)
+        # Calculate Kalman Gain
+        K = self.P_t @ H.T @ np.linalg.inv(S)
 
-
-        acc_prev = acc
-        self.P_t = F_t @ self.P_t @ F_t.T + self.Q_t  # Cập nhật ma trận hiệp phương sai P_t|t-1
-        # self.P_t = F_t @ self.P_t @ F_t.T  # Cập nhật ma trận hiệp phương sai P_t|t-1
-
-        # self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
-
-        # Predict state and covariance
-        # self.x_t = self.x_t + B_t @ u_t.reshape(-1, 1)
-        # self.P_t = F_t @ self.P_t @ F_t.T
-
-    def update(self, z_t):
-        """ Bước cập nhật trạng thái với đo lường mới z_t = [x_meas, y_meas, phi_meas] """
-        # Sai số đo lường (Innovation)
-        d_t = z_t - self.H_t @ self.x_t  
-
-        # Ma trận hiệp phương sai của Innovation
-        S_t = self.H_t @ self.P_t @ self.H_t.T + self.R_t
-
-        # Tính Kalman Gain
-        K_t = self.P_t @ self.H_t.T @ np.linalg.inv(S_t)
-
-        # Cập nhật trạng thái
-        self.x_t = self.x_t + K_t @ d_t
-
-        self.P_t = (np.eye(4) - K_t @ self.H_t) @ self.P_t
-        # self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
+        # update state & covariance
+        self.x_t = self.x_t + K @ y_tilde
+        self.x_t[2,0] = wrap_to_pi(self.x_t[2,0])
+        self.P_t = (np.eye(self.P_t.shape[0]) - K @ H) @ self.P_t
 
 
     def get_state(self):
-        """ Trả về trạng thái hiện tại """
-        return self.x_t
+        return self.x_t.copy()
+
+    def get_cov(self):
+        return self.P_t.copy()
+    
     
 ekf = EKF(dt, Q_fixed, R_fixed)
 
@@ -301,15 +304,22 @@ def add_noise(data, sigma):
 # x_gt, y_gt, phi_gt, v_gt = trajectory_circle(dt, T, R=1.0)
 x_gt, y_gt, phi_gt, v_gt = trajectory_square(dt, T, L=1.0)
 
-x_cam = add_noise(np.array(x_gt), 0.03)     # camera noise
-y_cam = add_noise(np.array(y_gt), 0.03)
-phi_cam = add_noise(np.array(phi_gt), 0.03)
-v_enc = add_noise(np.array(v_gt), 0.01)     # encoder noise
-# yaw_dot_imu = add_noise(np.zeros(len(time_stamps)), 0.005)  # IMU noise
-yaw_dot_imu = add_noise(np.ones(len(time_stamps)) * 0.001, 0.005)  # rad/s
+x_cam = add_noise(np.array(x_gt), 0.05)     # camera noise
+y_cam = add_noise(np.array(y_gt), 0.05)
+phi_cam = add_noise(np.array(phi_gt), 0.05)
+v_enc = add_noise(np.array(v_gt), 0.05)     # encoder noise
+yaw_dot_imu = add_noise(np.ones(len(time_stamps)) * 0.001, 0.01)  # rad/s
+
+prev_v_enc = v_enc[0]
+
 for k in range(len(time_stamps)):
     # Input từ encoder + IMU
-    u_t = np.array([v_enc[k], yaw_dot_imu[k]])  
+    
+    curr_v_enc = v_enc[k]
+    delta_v = curr_v_enc - prev_v_enc
+    omega = float(yaw_dot_imu[k])    # imu yaw rate
+    
+    u_t = np.array([omega, delta_v])  
     
     # Đo từ camera
     z_t = np.array([[x_cam[k]], 
@@ -320,6 +330,9 @@ for k in range(len(time_stamps)):
     ekf.update(z_t)
     
     state = ekf.get_state().flatten()
+    
+    prev_v_enc = curr_v_enc
+    
     est_x.append(state[0])
     est_y.append(state[1])
     est_phi.append(state[2])
@@ -352,12 +365,10 @@ plt.legend()
 plt.axis("equal")
 plt.show()
 
-plot_yaw_ekf()
-plot_yaw_dist()
+
 plot_x_ekf()
-plot_x_dist()
 plot_y_ekf()
-plot_y_dist()
+plot_yaw_ekf()
 
 yaw_ekf_error_mean = sum(yaw_ekf_error)/len(yaw_ekf_error)
 yaw_dist_error_mean = sum(yaw_dist_error)/len(yaw_dist_error)

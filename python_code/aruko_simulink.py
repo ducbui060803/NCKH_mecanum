@@ -47,69 +47,69 @@ y_desired = 0 # Simulink desired y
 yaw_desired = 90 # Simulink desired yaw
 def plot_yaw_kalman():
     plt.figure(figsize=(10, 6))
+    plt.plot(time_stamps, yaw_normal_list, 'r-', label="yaw_normal", linewidth=0.8)
     plt.plot(time_stamps, yaw_kalman_list, 'b-', label="yaw_kalman ", linewidth=0.8)
-    plt.plot(time_stamps, yaw_desired_list, 'r--', label="yaw_desired", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("yaw (degree)")
-    plt.title("Comparison of yaw_kalman vs yaw_desired")
+    plt.title("Comparison of yaw_kalman vs yaw_normal")
     plt.legend()
     plt.grid(True)
     plt.show()
     
-def plot_yaw_normal():
-    plt.figure(figsize=(10, 6))
-    plt.plot(time_stamps, yaw_normal_list, 'b-', label="yaw_normal ", linewidth=0.8)
-    plt.plot(time_stamps, yaw_desired_list, 'r--', label="yaw_desired", linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("yaw (degree)")
-    plt.title("Comparison of yaw_normal vs yaw_desired")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+# def plot_yaw_normal():
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(time_stamps, yaw_normal_list, 'b-', label="yaw_normal ", linewidth=0.8)
+#     plt.plot(time_stamps, yaw_desired_list, 'r--', label="yaw_desired", linewidth=0.8)
+#     plt.xlabel("Time (s)")
+#     plt.ylabel("yaw (degree)")
+#     plt.title("Comparison of yaw_normal vs yaw_desired")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
     
 def plot_x_kalman():
     plt.figure(figsize=(10, 6))
-    plt.plot(time_stamps, x_kalman_list, 'g-', label="x_kalman ", linewidth=0.8)
-    plt.plot(time_stamps, x_desired_list, 'r--', label="x_desired", linewidth=0.8)
+    plt.plot(time_stamps, x_normal_list, 'r-', label="x_normal", linewidth=0.8)
+    plt.plot(time_stamps, x_kalman_list, 'b-', label="x_kalman ", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("x (m)")
-    plt.title("Comparison of x_kalman vs x_desired")
+    plt.title("Comparison of x_kalman vs x_normal")
     plt.legend()
     plt.grid(True)
     plt.show()
     
-def plot_x_normal():
-    plt.figure(figsize=(10, 6))
-    plt.plot(time_stamps, x_normal_list, 'g-', label="x_normal ", linewidth=0.8)
-    plt.plot(time_stamps, x_desired_list, 'r--', label="x_desired", linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("x(m)")
-    plt.title("Comparison of x_normal vs x_desired")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+# def plot_x_normal():
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(time_stamps, x_normal_list, 'g-', label="x_normal ", linewidth=0.8)
+#     plt.plot(time_stamps, x_desired_list, 'r--', label="x_desired", linewidth=0.8)
+#     plt.xlabel("Time (s)")
+#     plt.ylabel("x(m)")
+#     plt.title("Comparison of x_normal vs x_desired")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
     
 def plot_y_kalman():
     plt.figure(figsize=(10, 6))
-    plt.plot(time_stamps, y_kalman_list, '-', color='purple', label="y_kalman ", linewidth=0.8)
-    plt.plot(time_stamps, y_desired_list, 'r--', label="y_desired", linewidth=0.8)
+    plt.plot(time_stamps, y_normal_list, 'r-', label="y_normal", linewidth=0.8)
+    plt.plot(time_stamps, y_kalman_list, 'b-', label="y_kalman ", linewidth=0.8)
     plt.xlabel("Time (s)")
     plt.ylabel("y (m)")
-    plt.title("Comparison of y_kalman vs y_desired")
+    plt.title("Comparison of y_kalman vs y_normal")
     plt.legend()
     plt.grid(True)
     plt.show()
     
-def plot_y_normal():
-    plt.figure(figsize=(10, 6))
-    plt.plot(time_stamps, y_normal_list, '-', color='purple', label="y_normal ", linewidth=0.8)
-    plt.plot(time_stamps, y_desired_list, 'r--', label="y_desired", linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("y (m)")
-    plt.title("Comparison of y_normal vs y_desired")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+# def plot_y_normal():
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(time_stamps, y_normal_list, '-', color='purple', label="y_normal ", linewidth=0.8)
+#     plt.plot(time_stamps, y_desired_list, 'r--', label="y_desired", linewidth=0.8)
+#     plt.xlabel("Time (s)")
+#     plt.ylabel("y (m)")
+#     plt.title("Comparison of y_normal vs y_desired")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
 # Simulink Global variable
 v = 0
 pre_v = 0
@@ -503,25 +503,23 @@ while True:
 
             cv2.putText(frame, f"X_aruco={pose['x']:.3f}, Y_aruco={pose['y']:.3f}, Phi_aruco={pose['phi']:.3f}",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            cv2.putText(frame, f"X_EKF={state[0]:.3f}, Y_EKF={state[1]:.3f}, Phi_EKF={state[2]:.3f}",
-                        (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             
             # Lưu giá trị để plot
             now = time.time() - start_time
             time_stamps.append(now)
             yaw_kalman_list.append(phi_kf) 
-            yaw_normal_list.append(phi_filt) 
+            yaw_normal_list.append(phi_est) 
             x_kalman_list.append(x_kf) 
-            x_normal_list.append(x_filt) 
+            x_normal_list.append(x_est) 
             y_kalman_list.append(y_kf) 
-            y_normal_list.append(y_filt)
+            y_normal_list.append(y_est)
             
             yaw_kalman_error.append(abs(phi_kf - yaw_desired))
-            yaw_normal_error.append(abs(phi_filt - yaw_desired))
+            yaw_normal_error.append(abs(phi_est - yaw_desired))
             x_kalman_error.append(abs(x_kf - x_desired))
-            x_normal_error.append(abs(x_filt - x_desired))
+            x_normal_error.append(abs(x_est - x_desired))
             y_kalman_error.append(abs(y_kf - y_desired))
-            y_normal_error.append(abs(y_filt - y_desired))
+            y_normal_error.append(abs(y_est - y_desired))
             
             yaw_desired_list.append(yaw_desired)
             x_desired_list.append(x_desired)
@@ -530,13 +528,14 @@ while True:
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-plot_yaw_kalman()
-plot_yaw_normal()
-plot_x_kalman()
-plot_x_normal()
-plot_y_kalman()
-plot_y_normal()
 
+
+plot_x_kalman()
+# plot_x_normal()
+plot_y_kalman()
+# plot_y_normal()
+plot_yaw_kalman()
+# plot_yaw_normal()
 yaw_kalman_error_mean = sum(yaw_kalman_error)/len(yaw_kalman_error)
 yaw_normal_error_mean = sum(yaw_normal_error)/len(yaw_normal_error)
 x_kalman_error_mean = sum(x_kalman_error)/len(x_kalman_error)
