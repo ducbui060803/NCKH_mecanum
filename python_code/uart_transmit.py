@@ -8,9 +8,6 @@ from std_msgs.msg import Float32MultiArray
 # Thay đổi cho phù hợp với cổng Arduino của bạn
 SERIAL_PORT = '/dev/ttyUSB0'  # hoặc /dev/ttyACM0
 BAUD_RATE = 115200
-# V = 0
-
-
 class SerialCommNode:
     def __init__(self):
         rospy.init_node('serial_comm_node')
@@ -28,12 +25,12 @@ class SerialCommNode:
             exit(1)
 
         # Subscriber để nhận Twist (vx, vy, omega)
-        rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_callback)
+        rospy.Subscriber("/cmd_vel", Twist, self.controller_callback)
 
         # Publisher để publish V và omega đo được
-        self.vel_pub = rospy.Publisher("/measured_vel", Float32MultiArray, queue_size=10)
+        self.vel_pub = rospy.Publisher("/uart_data", Float32MultiArray, queue_size=10)
 
-    def cmd_vel_callback(self, msg):
+    def controller_callback(self, msg):
         vx = msg.linear.x
         vy = msg.linear.y
         omega = msg.angular.z
@@ -43,31 +40,21 @@ class SerialCommNode:
         print(f"Send vx {vx}; vy {vy}; omega {omega}\n")
         self.ser.write(command.encode())
     def run(self):
-        global V
         rate = rospy.Rate(100)  # 100 Hz
         while not rospy.is_shutdown():
             try:
                 line = self.ser.readline().decode('utf-8').strip()
                 if line:
-                    # VD: 0.123 0.045
                     parts = line.split()
                     if len(parts) == 3:
-                        V = float(parts[0])
-                        yaw = float(parts[1])
-                        theta_dot = float(parts[2])
-                        print(f"Received V: {V}; yaw: {yaw};  theta_dot: {theta_dot}\n")
+                        vx_local_encoder = float(parts[0])
+                        vy_local_encoder = float(parts[1])
+                        yaw_imu = float(parts[2])
+                        yaw_dot = float(parts[3])
+                        print(f"Received vx: {vx_local_encoder}; vy: {vy_local_encoder}; yaw_imu: {yaw_imu};  theta_dot: {yaw_dot}\n")
                         msg = Float32MultiArray()
-                        msg.data = [V, yaw, theta_dot]
+                        msg.data = [vx_local_encoder, vy_local_encoder, yaw_imu, yaw_dot]
                         self.vel_pub.publish(msg)
-                # data = self.ser.read(12)   # đọc đúng 12 bytes
-                # print(f"data = {data}")
-                # if len(data) == 12:
-                #     v, yaw, theta_dot = struct.unpack('<fff', data)  # little-endian float32
-                #     print(f"Received V={v}, yaw={yaw}, theta_dot={theta_dot}")
-
-                #     msg = Float32MultiArray()
-                #     msg.data = [v, yaw, theta_dot]
-                #     self.vel_pub.publish(msg)
 
             except Exception as e:
                 rospy.logwarn("Serial error: %s", str(e))
