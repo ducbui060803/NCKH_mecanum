@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import rospy
 import struct
 import serial
@@ -37,8 +38,9 @@ class SerialCommNode:
 
         # Gửi xuống Arduino
         command = f"{vx:.3f} {vy:.3f} {omega:.3f}\n"
-        print(f"Send vx {vx}; vy {vy}; omega {omega}\n")
+        # print(f"Send vx {vx}; vy {vy}; omega {omega}\n")
         self.ser.write(command.encode())
+
     def run(self):
         rate = rospy.Rate(100)  # 100 Hz
         while not rospy.is_shutdown():
@@ -46,12 +48,12 @@ class SerialCommNode:
                 line = self.ser.readline().decode('utf-8').strip()
                 if line:
                     parts = line.split()
-                    if len(parts) == 3:
+                    if len(parts) == 4:
                         vx_local_encoder = float(parts[0])
                         vy_local_encoder = float(parts[1])
                         yaw_imu = float(parts[2])
                         yaw_dot = float(parts[3])
-                        print(f"Received vx: {vx_local_encoder}; vy: {vy_local_encoder}; yaw_imu: {yaw_imu};  theta_dot: {yaw_dot}\n")
+                        print(f"Received vx: {vx_local_encoder}; vy: {vy_local_encoder}; yaw_imu: {yaw_imu};  omega: {yaw_dot}\n")
                         msg = Float32MultiArray()
                         msg.data = [vx_local_encoder, vy_local_encoder, yaw_imu, yaw_dot]
                         self.vel_pub.publish(msg)

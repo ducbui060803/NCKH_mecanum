@@ -169,27 +169,38 @@ class EKF:
         # self.P_t = F_t @ self.P_t @ F_t.T
 
     def update(self, z_t):
-        """ Bước cập nhật trạng thái với đo lường mới z_t = [x_meas, y_meas, phi_meas] """
-        # Sai số đo lường (Innovation)
-        d_t = z_t - self.H_t @ self.x_t  
-        self.Q_t = self.alpha_Q * self.Q_t + (1 - self.alpha_Q) * (self.K_t @ d_t @ d_t.T @ self.K_t.T)
-        
-        # Cập nhật động ma trận nhiễu đo lường R_t
-        residual_t = z_t - self.H_t @ self.x_t
-        self.R_t = self.alpha_R * self.R_t + (1 - self.alpha_R) * (residual_t @ residual_t.T + self.H_t @ self.P_t @ self.H_t.T)
-        
-        # Ma trận hiệp phương sai của Innovation
-        S_t = self.H_t @ self.P_t @ self.H_t.T + self.R_t
+        """
+        Adaptive EKF update step.
+        z_t: measurement vector [x, y, phi]
+        """
+        # Chuyển z_t về dạng cột
+        z = np.array(z_t, dtype=float).reshape((-1,1))
 
-        # Tính Kalman Gain
-        K_t = self.P_t @ self.H_t.T @ np.linalg.inv(S_t)
-        #print(f'K:    {K_t}')
-        # print(f'truoc K: {self.x_t[3]}')
+        # Sai số đo lường (Innovation)
+        y_tilde = z - self.H_t @ self.x_t
+        # wrap yaw
+        y_tilde[2,0] = wrap_to_pi(y_tilde[2,0])
+
+        # Cập nhật Q_t (adaptive process noise)
+        self.Q_t = self.alpha_Q * self.Q_t + (1 - self.alpha_Q) * (self.K_t @ y_tilde @ y_tilde.T @ self.K_t.T)
+
+        # Cập nhật R_t (adaptive measurement noise)
+        residual = z - self.H_t @ self.x_t
+        self.R_t = self.alpha_R * self.R_t + (1 - self.alpha_R) * (residual @ residual.T + self.H_t @ self.P_t @ self.H_t.T)
+
+        # Innovation covariance
+        S = self.H_t @ self.P_t @ self.H_t.T + self.R_t
+
+        # Kalman gain
+        K = self.P_t @ self.H_t.T @ np.linalg.inv(S)
+
         # Cập nhật trạng thái
-        self.x_t = self.x_t + K_t @ d_t
-        # print(f'sau K: {self.x_t[3]}')
-        self.P_t = (np.eye(4) - K_t @ self.H_t) @ self.P_t
-        # self.x_t[2, 0] = np.arctan2(np.sin(self.x_t[2, 0]), np.cos(self.x_t[2, 0]))
+        self.x_t = self.x_t + K @ y_tilde
+        # wrap yaw nếu cần
+        # self.x_t[2,0] = wrap_to_pi(self.x_t[2,0])
+
+        # Cập nhật hiệp phương sai
+        self.P_t = (np.eye(self.x_t.shape[0]) - K @ self.H_t) @ self.P_t
 
 
     def get_state(self):

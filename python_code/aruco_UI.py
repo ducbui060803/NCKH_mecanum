@@ -9,6 +9,8 @@ from gui_ui import Ui_MainWindow
 pose_buffer = []
 alpha, a_a = 0.5, 0.5
 filtered_x = filtered_y = filtered_angle = None
+llat = 0.15 # khoang cach camera den trong tam xe
+llon = 0.0
 # ---------------------------- Marker map ----------------------------
 id_12 = [-1,  -1,  -math.pi]
 id_11 = [-0.4, -1.4, -math.pi]
@@ -17,24 +19,17 @@ id_9  = [1,   -1,   -math.pi/2 ]
 id_8  = [1.4, -0.4, -math.pi/2]
 id_7  = [1.4,  0.4,  0]
 id_6  = [1,    1,    0]
-id_5  = [0.4,  1.4,  0]
+id_5  = [0.5,  1.3,  math.pi/2]
 id_4  = [-0.4, 1.4,  math.pi/2]
 id_3  = [-1,   1,    math.pi/2]
 id_2  = [0,    0,    math.pi/2]
-id_1  = [1, 2,  math.pi/2]
-id_0  = [0,  1,    math.pi/2]
+id_1  = [0, 1.3,  math.pi/2]
+id_0  = [-0.5,  1.3,    math.pi/2]
 #---------------------------- End Marker map ----------------------------
 # ---------------------------- Socket ----------------------------
-IPC_IP = "172.18.223.255"   # Thay bằng IP của IPC
+IPC_IP = "172.18.222.108"   # Thay bằng IP của IPC
 PORT = 5005  
 
-# # ---------------------------- Hàm gửi pose qua UDP ----------------------------
-# def send_pose(x, y, yaw):
-#     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-#         pose_str = f"{x},{y},{yaw}"
-#         sock.sendto(pose_str.encode(), (IPC_IP, PORT))
-#         print(f"Sent: {pose_str}")
-        
 # ---------------------------- Hàm lọc ----------------------------
 
 def dis_filter(current_value, pre_ar, a):
@@ -133,9 +128,9 @@ def my_estimatePoseSingleMarkers(corners, marker_size, mtx, distortion):
 # ------------- Tính toán pose ArUco trong hệ toạ độ toàn cục -------------------
 def get_aruco(x0, y0, phi0, rvect, tvect):
     phi1 = math.atan(-rvect[2][0] / math.sqrt(rvect[2][1]**2 + rvect[2][2]**2))
-    d = math.sqrt(tvect[0]**2 + (tvect[2] + 0.11)**2)
+    d = math.sqrt(tvect[0]**2 + (tvect[2] + llat)**2)
     phiaruco = phi1 + phi0
-    phi2 = math.atan(tvect[0] / (tvect[2] + 0.11))
+    phi2 = math.atan(tvect[0] / (tvect[2] + llat))
     phi3 = phiaruco - phi2
     xaruco = x0 - d * math.cos(phi3)
     yaruco = y0 - d * math.sin(phi3)
@@ -170,8 +165,9 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # ------------------------- Biến và cờ trạng thái -------------------------
         self.running = False
         self.t = 0
-        self.dt = 0.02
-        
+        self.dt = 0.01
+        self.path_start_flag = 0
+        self.stop_flag       = 0
         # safe defaults (important to avoid AttributeError on first update)
         self.xd = 0.0; self.yd = 0.0; self.yaw_d = 0.0
         self.vx_d = 0.0; self.vy_d = 0.0; self.yaw_dot_d = 0.0
@@ -184,13 +180,17 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # Biến lưu data nhận từ Controller
         self.x_EKF = 0.0
         self.y_EKF = 0.0
-        self.yaw_EKF = 0.0
+        self.yaw_EKF = np.pi/2
         self.v_local_encoder = [0.0, 0.0, 0.0]
         self.v_local_EKF = [0.0, 0.0, 0.0]
         
         # Biến lưu data vẽ đồ thị
         self.desired_points = []
-        self.actual_points = []
+        self.aruco_points = []
+        self.ekf_points = []
+
+        # Aruco Detected Flag
+        self.aruco_detected = False
 
         # ---------------------------- Khởi tạo camera ----------------------------
         self.cap = cv2.VideoCapture(0)
@@ -211,30 +211,29 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.timer_frame.timeout.connect(self.update_frame)
         self.timer_frame.start(30)
 
-        # Timer plot (5 Hz)
+        # Timer plot (100 Hz)
         self.timer_plot = QtCore.QTimer()
         self.timer_plot.timeout.connect(self.update_plot)
-        self.timer_plot.start(200)
+        self.timer_plot.start(50)
 
-        # Timer send socket (20 Hz)
+        # Timer send socket (100 Hz)
         self.timer_send = QtCore.QTimer()
         self.timer_send.timeout.connect(self.send_to_ipc)
-        self.timer_send.start(50)
+        self.timer_send.start(10)
         
         # ------------------------- connect button backend -------------------------
         self.Connect_btn.clicked.connect(self.connect_socket)
         self.Disconnect_btn.clicked.connect(self.disconnect_socket)
         self.Start_btn.clicked.connect(self.start_motion)
         self.Stop_btn.clicked.connect(self.stop_motion)
-        self.Clear_Graph_btn_.clicked.connect(self.clear_graph)
+        self.Clear_Graph_btn_.clicked.connect(self.reset_app)
 
     def connect_socket(self):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect(("192.168.1.100", 5000))  # đổi IP cho IPC
+            self.sock.connect((IPC_IP, PORT))
             self.sock.setblocking(False)
 
-            # Timer để check incoming data
             self.timer_socket = QtCore.QTimer()
             self.timer_socket.timeout.connect(self.check_socket_data)
             self.timer_socket.start(50)
@@ -263,13 +262,18 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.running = True
         self.t0 = time.time()   # mốc thời gian bắt đầu
         self.t = 0
+        self.path_start_flag = 1
+        self.stop_flag = 0
         self.desired_points.clear()
-        self.actual_points.clear()
+        self.aruco_points.clear()
+        self.ekf_points.clear()
         if hasattr(self, "error_data"):
             for k in self.error_data:
                 self.error_data[k].clear()
     
     def stop_motion(self):
+        # self.path_start_flag = 0
+        self.stop_flag = 1
         self.running = False
 
     def clear_graph(self):
@@ -281,23 +285,86 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.plot_widget_1.draw()
         self.plot_widget_2.draw()
         self.plot_widget_3.draw()
-
-    # ---------------------------- Data from Aruco Camera thread ----------------------------
-    def handle_pose(self, x, y, yaw):
-        self.x_aruco, self.y_aruco, self.yaw_aruco = x, y, yaw
-        
-
-    # ---------------------------- Data from Trạectory Thread ----------------------------
-    def handle_traj(self, x, y, yaw, vx, vy, vyaw, ax, ay, ayaw):
-        self.xd, self.yd, self.yaw_d = x, y, yaw
-        self.vx_d, self.vy_d, self.yaw_dot_d = vx, vy, vyaw
-        self.ax_d, self.ay_d, self.yaw_2dot_d = ax, ay, ayaw
     
+    def reset_app(self):
+        # Dừng robot
+        self.running = False
+        self.path_start_flag = 0
+        self.stop_flag = 0
+        self.t = 0
+
+        # Reset quỹ đạo mong muốn
+        self.xd = 0.0; self.yd = 0.0; self.yaw_d = np.pi/2
+        self.vx_d = 0.0; self.vy_d = 0.0; self.yaw_dot_d = 0.0
+        self.ax_d = 0.0; self.ay_d = 0.0; self.yaw_2dot_d = 0.0
+
+        # Reset dữ liệu ArUco
+        self.x_aruco = 0.0; self.y_aruco = 0.0; self.yaw_aruco = np.pi/2
+        self.x_kf = 0.0; self.y_kf = 0.0; self.yaw_kf = np.pi/2
+
+        # Reset dữ liệu EKF
+        self.x_EKF = 0.0; self.y_EKF = 0.0; self.yaw_EKF = np.pi/2
+        self.v_local_encoder = [0.0, 0.0, 0.0]
+        self.v_local_EKF = [0.0, 0.0, 0.0]
+
+        # Reset đồ thị
+        self.desired_points.clear()
+        self.aruco_points.clear()
+        self.ekf_points.clear()
+        if hasattr(self, "error_data"):
+            for k in self.error_data:
+                self.error_data[k].clear()
+
+        # Clear axes
+        for ax in [self.ax1, self.ax2, self.ax3, self.ax4]:
+            ax.cla()
+
+        # --- Khởi tạo lại line cho đồ thị ---
+        self.desired_line = self.ax1.plot([], [], 'r--', label="Desired")[0]
+        self.aruco_line   = self.ax1.plot([], [], 'g-', label="Aruco")[0]
+        self.ekf_line     = self.ax1.plot([], [], 'b--', label="EKF")[0]
+        self.ax1.set_xlabel("x (cm)")
+        self.ax1.set_ylabel("y (cm)")
+        self.ax1.legend()
+
+        # Khởi tạo lại các error lines
+        self.error_lines = {
+            "x_aruco": self.ax2.plot([], [], 'g-')[0],
+            "y_aruco": self.ax3.plot([], [], 'g-')[0],
+            "yaw_aruco": self.ax4.plot([], [], 'g-')[0],
+            "x_ekf": self.ax2.plot([], [], 'b--')[0],   # dashed line cho EKF
+            "y_ekf": self.ax3.plot([], [], 'b--')[0],
+            "yaw_ekf": self.ax4.plot([], [], 'b--')[0],
+        }
+
+        # Clear dữ liệu error
+        if hasattr(self, "error_data"):
+            for k in self.error_data:
+                self.error_data[k].clear()
+
+        # Redraw
+        self.plot_widget.draw()
+        self.plot_widget_1.draw()
+        self.plot_widget_2.draw()
+        self.plot_widget_3.draw()
+
+        # Reset Kalman filter
+        global kf_x, kf_y, kf_yaw
+        kf_x = SimpleKalman()
+        kf_y = SimpleKalman()
+        kf_yaw = SimpleKalman()
+
+        # Reset filtered values
+        global filtered_x, filtered_y, filtered_angle
+        filtered_x = filtered_y = filtered_angle = None
+
+        print("Application reset to initial state")
+
     def update_aruco_pose(self, x, y, yaw):
         """Cập nhật giá trị ArUco vào các ô text."""
-        self.x_aruco_txt.setPlainText(f"{x:.2f}")   # hiển thị 2 số lẻ
-        self.y_aruco_txt.setPlainText(f"{y:.2f}")
-        self.yaw_aruco_txt.setPlainText(f"{yaw:.2f}")  # giả sử yaw rad, bạn có thể đổi sang degree nếu muốn
+        self.x_aruco_txt.setText(f"{x:.3f}")   # hiển thị 2 số lẻ
+        self.y_aruco_txt.setText(f"{y:.3f}")
+        self.yaw_aruco_txt.setText(f"{yaw:.3f}")  # giả sử yaw rad, bạn có thể đổi sang degree nếu muốn
         
     # --- Quỹ đạo mong muốn theo lựa chọn ---
     def desired_trajectory(self, t):
@@ -324,7 +391,7 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
                 return 0, L*(1 - 4*(s-0.75)), yaw_traj_desired, 0, -v, 0, a, 0, 0
 
         elif mode == "Circle":
-            R = 1.0
+            R = 0.5
             T = 40  # chu kỳ hoàn thành quỹ đạo (giây)
             w = 2*math.pi/T  # tần số góc
             if t >= T:  # Dừng tại điểm cuối (x=R, y=0)
@@ -374,60 +441,130 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         vx_global_d, vy_global_d, yaw_dot_d, \
         ax_global_d, ay_global_d, yaw_2dot_d = self.desired_trajectory(self.t) # return 9 params 
         
+        # --- Nếu robot đã đi hết path, tự dừng ---
+        # Kiểm tra tốc độ mong muốn
+        if vx_global_d == 0 and vy_global_d == 0 and yaw_dot_d == 0:
+            self.stop_motion()
+            print("Robot reached end of path, stopping.")
+    
+            # --- Tính sai số ArUco ---
+            ex_a = np.array(self.error_data["x_aruco"])
+            ey_a = np.array(self.error_data["y_aruco"])
+            eyaw_a = np.array(self.error_data["yaw_aruco"])
+
+            mean_ex_a, mean_ey_a, mean_eyaw_a = np.mean(np.abs(ex_a)), np.mean(np.abs(ey_a)), np.mean(np.abs(eyaw_a))
+            max_ex_a, max_ey_a, max_eyaw_a = np.max(np.abs(ex_a)), np.max(np.abs(ey_a)), np.max(np.abs(eyaw_a))
+
+            # --- Tính sai số EKF ---
+            ex_e = np.array(self.error_data["x_ekf"])
+            ey_e = np.array(self.error_data["y_ekf"])
+            eyaw_e = np.array(self.error_data["yaw_ekf"])
+
+            mean_ex_e, mean_ey_e, mean_eyaw_e = np.mean(np.abs(ex_e)), np.mean(np.abs(ey_e)), np.mean(np.abs(eyaw_e))
+            max_ex_e, max_ey_e, max_eyaw_e = np.max(np.abs(ex_e)), np.max(np.abs(ey_e)), np.max(np.abs(eyaw_e))
+
+            print(f"ArUco mean error: x={mean_ex_a:.3f}, y={mean_ey_a:.3f}, yaw={mean_eyaw_a:.3f}")
+            print(f"ArUco max  error: x={max_ex_a:.3f}, y={max_ey_a:.3f}, yaw={max_eyaw_a:.3f}")
+
+            print(f"EKF mean error: x={mean_ex_e:.3f}, y={mean_ey_e:.3f}, yaw={mean_eyaw_e:.3f}")
+            print(f"EKF max  error: x={max_ex_e:.3f}, y={max_ey_e:.3f}, yaw={max_eyaw_e:.3f}")
+            return
+        
+        # Save trajectory data to send to controller
+        self.xd, self.yd, self.yaw_d = xd, yd, yaw_d
+        self.vx_d, self.vy_d, self.yaw_dot_d = vx_global_d, vy_global_d, yaw_dot_d
+        self.ax_d, self.ay_d, self.yaw_2dot_d = ax_global_d, ay_global_d, yaw_2dot_d
+
         # --- Dữ liệu từ Aruco ---
         x_aruco, y_aruco, yaw_aruco = self.get_actual_pose()
-        self.update_aruco_pose(x_aruco, y_aruco, yaw_aruco)   
+        self.update_aruco_pose(x_aruco, y_aruco, yaw_aruco)
+
+        # Save aruco data to send to controller
+        self.x_aruco, self.y_aruco, self.yaw_aruco = x_aruco, y_aruco, yaw_aruco 
+
+        # EKF data to compare
+        x_ekf = self.x_EKF
+        y_ekf = self.y_EKF
+        yaw_ekf = self.yaw_EKF
+
+        x_ekf = np.clip(self.x_EKF, -2, 2)
+        y_ekf = np.clip(self.y_EKF, -2, 2)
         # --- Lưu dữ liệu ---
         self.desired_points.append([xd, yd])
-        self.actual_points.append([x_aruco, y_aruco])
-
+        self.aruco_points.append([x_aruco, y_aruco])
+        self.ekf_points.append([x_ekf, y_ekf])
+    
         # Giới hạn số điểm để tránh lag
         MAX_POINTS = 1000
         if len(self.desired_points) > MAX_POINTS:
             self.desired_points.pop(0)
-        if len(self.actual_points) > MAX_POINTS:
-            self.actual_points.pop(0)
+        if len(self.aruco_points) > MAX_POINTS:
+            self.aruco_points.pop(0)
+        if len(self.ekf_points) > MAX_POINTS:
+            self.ekf_points.pop(0)
+            
 
         # --- Vẽ quỹ đạo ---
         if not hasattr(self, "desired_line"):
             # Khởi tạo line chỉ một lần
-            self.desired_line, = self.ax1.plot([], [], 'r-', label="Desired")
-            self.actual_line,  = self.ax1.plot([], [], 'b-', label="Actual")
+            self.desired_line, = self.ax1.plot([], [], 'r--', label="Desired", linewidth=0.8)
+            self.ekf_line,  = self.ax1.plot([], [], 'b--', label="EKF", linewidth=0.8)
+            self.aruco_line,  = self.ax1.plot([], [], 'g-', label="Aruco", linewidth=0.8)
             self.ax1.set_xlabel("x (cm)")
             self.ax1.set_ylabel("y (cm)")
             self.ax1.legend()
 
         self.desired_line.set_data([p[0] for p in self.desired_points],
                                 [p[1] for p in self.desired_points])
-        self.actual_line.set_data([p[0] for p in self.actual_points],
-                                [p[1] for p in self.actual_points])
+        self.aruco_line.set_data([p[0] for p in self.aruco_points],
+                                [p[1] for p in self.aruco_points])
+        self.ekf_line.set_data([p[0] for p in self.ekf_points],
+                                [p[1] for p in self.ekf_points])
 
         self.ax1.relim()
         self.ax1.autoscale_view()
+        # self.ax1.set_ylim(-1, 1)  # trục y từ 0 đến 10
+        # self.ax1.autoscale_view(scalex=True, scaley=False)
         self.plot_widget.draw()
 
         # --- Error plots ---
-        ex = x_aruco - xd
-        ey = y_aruco - yd
-        e_yaw = yaw_aruco - yaw_d
+        # Sai số ArUco
+        ex_aruco = x_aruco - xd
+        ey_aruco = y_aruco - yd
+        eyaw_aruco = yaw_aruco - yaw_d
+
+        # Sai số EKF
+        ex_ekf = x_ekf - xd
+        ey_ekf = y_ekf - yd
+        eyaw_ekf = yaw_ekf - yaw_d
 
         if not hasattr(self, "error_lines"):
             self.error_lines = {
-                "x": self.ax2.plot([], [], 'r-')[0],
-                "y": self.ax3.plot([], [], 'b-')[0],
-                "yaw": self.ax4.plot([], [], 'g-')[0],
+                "x_aruco": self.ax2.plot([], [], 'g-')[0],
+                "y_aruco": self.ax3.plot([], [], 'g-')[0],
+                "yaw_aruco": self.ax4.plot([], [], 'g-')[0],
+                "x_ekf": self.ax2.plot([], [], 'b--')[0],   # dashed line cho EKF
+                "y_ekf": self.ax3.plot([], [], 'b--')[0],
+                "yaw_ekf": self.ax4.plot([], [], 'b--')[0],
             }
             self.ax2.set_ylabel("error x (cm)")
             self.ax3.set_ylabel("error y (cm)")
             self.ax4.set_ylabel("error yaw (rad)")
 
-            self.error_data = {"t": [], "x": [], "y": [], "yaw": []}
+            self.error_data = {
+                "t": [],
+                "x_aruco": [], "y_aruco": [], "yaw_aruco": [],
+                "x_ekf": [], "y_ekf": [], "yaw_ekf": []
+            }
 
         # Lưu dữ liệu error
         self.error_data["t"].append(self.t)
-        self.error_data["x"].append(ex)
-        self.error_data["y"].append(ey)
-        self.error_data["yaw"].append(e_yaw)
+        self.error_data["x_aruco"].append(ex_aruco)
+        self.error_data["y_aruco"].append(ey_aruco)
+        self.error_data["yaw_aruco"].append(eyaw_aruco)
+        self.error_data["x_ekf"].append(ex_ekf)
+        self.error_data["y_ekf"].append(ey_ekf)
+        self.error_data["yaw_ekf"].append(eyaw_ekf)
 
         # Giới hạn số điểm error
         if len(self.error_data["t"]) > MAX_POINTS:
@@ -435,13 +572,19 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
                 self.error_data[k].pop(0)
 
         # Update line
-        self.error_lines["x"].set_data(self.error_data["t"], self.error_data["x"])
-        self.error_lines["y"].set_data(self.error_data["t"], self.error_data["y"])
-        self.error_lines["yaw"].set_data(self.error_data["t"], self.error_data["yaw"])
+        self.error_lines["x_aruco"].set_data(self.error_data["t"], self.error_data["x_aruco"])
+        self.error_lines["y_aruco"].set_data(self.error_data["t"], self.error_data["y_aruco"])
+        self.error_lines["yaw_aruco"].set_data(self.error_data["t"], self.error_data["yaw_aruco"])
+
+        self.error_lines["x_ekf"].set_data(self.error_data["t"], self.error_data["x_ekf"])
+        self.error_lines["y_ekf"].set_data(self.error_data["t"], self.error_data["y_ekf"])
+        self.error_lines["yaw_ekf"].set_data(self.error_data["t"], self.error_data["yaw_ekf"])
 
         for ax in [self.ax2, self.ax3, self.ax4]:
             ax.relim()
             ax.autoscale_view()
+            # ax.set_ylim(-1, 1)  # trục y từ 0 đến 10
+            # ax.autoscale_view(scalex=True, scaley=False)
 
         self.plot_widget_1.draw()
         self.plot_widget_2.draw()
@@ -456,6 +599,8 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # ------------------------------ Detect ArUco ------------------------------
         corners, ids, _ = self.detector.detectMarkers(frame)
         if ids is not None:
+            # aruco_detected = True when found a marker on frame
+            self.aruco_detected = True
             all_marker, distance_infor = [], []
             # Using custom pose estimation function to get rvecs and tvecs
             rvecs, tvecs, _ = my_estimatePoseSingleMarkers(corners, marker_size, camera_matrix, dist_coeffs)
@@ -502,7 +647,9 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
 
                 cv2.putText(frame, f"X={pose['x']:.3f}, Y={pose['y']:.3f}, yaw={pose['yaw']:.3f}",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-
+        else:
+            # aruco_detected = False when not found a marker on frame
+            self.aruco_detected = False
         # Convert frame sang QImage để hiển thị trong QLabel
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
@@ -511,19 +658,24 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
 
     # ---------------- Send Data to Controller ----------------
     def send_to_ipc(self):
-        if not self.running:   # chỉ gửi khi đang chạy
+        if not self.path_start_flag:   # chỉ gửi khi đang chạy
             return
         data = {
             "x_global_aruco": self.x_aruco,
             "y_global_aruco": self.y_aruco,
             "yaw_aruco": self.yaw_aruco,
+            "aruco_detected": int(self.aruco_detected),  # 1 nếu có marker, 0 nếu không
             "x_global_desired": self.xd,
             "y_global_desired": self.yd,
             "yaw_desired": self.yaw_d,
             "x_dot_global_desired": self.vx_d,
             "y_dot_global_desired": self.vy_d,
+            "yaw_dot_global_desired": self.yaw_dot_d,
             "x_2dot_global_desired": self.ax_d,
-            "y_2dot_global_desired": self.ay_d
+            "y_2dot_global_desired": self.ay_d,
+            "yaw_2dot_global_desired": self.yaw_2dot_d,
+            "path_start_flag": self.path_start_flag,
+            "stop_flag": self.stop_flag,
         }
         try:
             if hasattr(self, "sock"):   # chỉ gửi nếu đã connect
@@ -560,13 +712,11 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.x_EKF  = data.get("x_global_EKF", 0.0)
         self.y_EKF  = data.get("y_global_EKF", 0.0)
         self.yaw_EKF = data.get("yaw_EKF", 0.0)
-        self.v_local_encoder = data.get("v_local_encoder", [0.0, 0.0, 0.0])
-        self.v_local_EKF     = data.get("v_local_EKF", [0.0, 0.0, 0.0])
 
         # Cập nhật UI nếu cần
-        self.label_x_EKF.setText(f"{self.x_EKF:.2f}")
-        self.label_y_EKF.setText(f"{self.y_EKF:.2f}")
-        self.label_yaw_EKF.setText(f"{self.yaw_EKF:.2f}")
+        self.x_predict_txt.setText(f"{self.x_EKF:.2f}")
+        self.y_predict_txt.setText(f"{self.y_EKF:.2f}")
+        self.yaw_predict_txt.setText(f"{self.yaw_EKF:.2f}")
             
     def closeEvent(self, event):
         # Giải phóng camera khi thoát
