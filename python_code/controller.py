@@ -90,8 +90,8 @@ class BacksteppingController:
         self.aruco_pub = rospy.Publisher('/aruco_pose', Float32MultiArray, queue_size=10)
         rospy.Subscriber('/ekf_pose', Float32MultiArray, self.ekf_callback)
         rospy.Subscriber("/uart_data", Float32MultiArray, self.uart_callback)
-        self.k1 = 5
-        self.k2 = 5
+        self.k1 = 7
+        self.k2 = 6
 
         self.path_start_flag = 0
         self.stop_flag = 0
@@ -126,7 +126,7 @@ class BacksteppingController:
         server_thread.start()
 
         # vòng lặp control
-        self.dt = 0.01    # Bước thời gian (s)
+        self.dt = 0.02    # Bước thời gian (s)
         rospy.Timer(rospy.Duration(self.dt), self.control_loop)
         rospy.spin()
     

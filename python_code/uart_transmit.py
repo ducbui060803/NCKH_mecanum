@@ -42,7 +42,7 @@ class SerialCommNode:
         self.ser.write(command.encode())
 
     def run(self):
-        rate = rospy.Rate(100)  # 100 Hz
+        rate = rospy.Rate(50)  # 100 Hz
         while not rospy.is_shutdown():
             try:
                 line = self.ser.readline().decode('utf-8').strip()

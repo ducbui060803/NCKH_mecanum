@@ -4,6 +4,7 @@ import rospy
 import numpy as np
 from std_msgs.msg import Float32MultiArray
 import time
+import math
 
 # --- ROS Node ---
 x_aruco = 0.0
@@ -20,6 +21,31 @@ path_start_flag = 0.0
 # --- EKF class ---
 def wrap_to_pi(angle):
     return np.arctan2(np.sin(angle), np.cos(angle))
+
+class ComplementaryFilter:
+    def __init__(self, Ts=0.02, tau=1.0):
+        # Ts: thời gian lấy mẫu (s)
+        # tau: hằng số thời gian bộ lọc
+        self.alpha = math.exp(-Ts / tau)
+        self.theta_fused_prev = 0.0
+        self.theta_imu_prev = 0.0
+
+    def update(self, theta_imu, theta_cam):
+        """
+        Cập nhật bộ lọc với giá trị mới từ IMU và camera.
+        theta_imu: góc từ IMU (độ)
+        theta_cam: góc từ camera (độ)
+        Trả về: góc hợp nhất (độ)
+        """
+        theta_fused = (self.alpha * self.theta_fused_prev
+                       + (theta_imu - self.theta_imu_prev)
+                       + (1 - self.alpha) * theta_cam)
+
+        # cập nhật giá trị cũ cho lần sau
+        self.theta_fused_prev = theta_fused
+        self.theta_imu_prev = theta_imu
+
+        return theta_fused
 
 class EKFBody:
     def __init__(self, dt, Q_fixed, R_fixed):
@@ -43,7 +69,9 @@ class EKFBody:
 
         # Fusing yaw với imu
         if (aruco_detect_flag == 1):
-            yaw = wrap_to_pi(0.6*yaw + 0.4*imu_yaw)
+            # yaw = wrap_to_pi(0.6*yaw + 0.4*imu_yaw)
+            yaw = filt.update(imu_yaw, yaw)
+
         else:
             yaw = imu_yaw
 
@@ -109,13 +137,14 @@ def publish_pose(pose):
     pose_pub.publish(msg)
 
 # --- Main ---
-dt = 0.01
+dt = 0.02
 # Q_fixed = [0.2, 0.2, 0.1, 0.02, 0.02]
 # R_fixed = [0.005, 0.005, 0.001]
 
-Q_fixed = [0.01, 0.01, 0.001, 0.005, 0.005] # x~1cm, y~1cm, phi~0.001 rad, v~0.03 m/s
-R_fixed = [0.03**2, 0.03**2, np.deg2rad(1)**2] # -> sigma_x = 3 cm, sigma_phi = 1 degree
+Q_fixed = [0.01, 0.01, 0.0001, 0.005, 0.005] # x~1cm, y~1cm, phi~0.001 rad, v~0.03 m/s
+R_fixed = [0.03**2, 0.03**2, np.deg2rad(3)**2] # -> sigma_x = 3 cm, sigma_phi = 1 degree
 
+filt = ComplementaryFilter(Ts=0.02, tau=1.0)
 
 ekf = EKFBody(dt, Q_fixed, R_fixed)
 

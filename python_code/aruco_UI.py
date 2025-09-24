@@ -7,7 +7,7 @@ from PyQt5 import QtWidgets, QtGui, QtCore
 from gui_ui import Ui_MainWindow
 # ---------------------------- Biến toàn cục ----------------------------
 pose_buffer = []
-alpha, a_a = 0.5, 0.5
+alpha, a_a = 0.5, 0.8
 filtered_x = filtered_y = filtered_angle = None
 llat = 0.15 # khoang cach camera den trong tam xe
 llon = 0.0
@@ -19,12 +19,22 @@ id_9  = [1,   -1,   -math.pi/2 ]
 id_8  = [1.4, -0.4, -math.pi/2]
 id_7  = [1.4,  0.4,  0]
 id_6  = [1,    1,    0]
-id_5  = [0.5,  1.3,  math.pi/2]
-id_4  = [-0.4, 1.4,  math.pi/2]
+# id_5  = [1,  2,  math.pi/2]
+# id_4  = [1.4, 1.2,  math.pi/2]
 id_3  = [-1,   1,    math.pi/2]
-id_2  = [0,    0,    math.pi/2]
-id_1  = [0, 1.3,  math.pi/2]
-id_0  = [-0.5,  1.3,    math.pi/2]
+# Circle path position
+# id_5  = [1.1, -0.1, math.pi]
+id_5  = [1.1, -0.1,  2* math.pi]
+id_4  = [1.1, -0.1, math.pi/2]
+id_2  = [-0.1,    -1.1,    - math.pi/2]
+id_1  = [-1.1, 0.1,  math.pi]
+id_0  = [0.1,  1.1,    math.pi/2]
+# Square path position
+# id_5  = [1,  2,  math.pi/2]
+# id_4  = [1.4, 1.2,  math.pi/2]
+# id_2  = [-0.4,    1.2,    math.pi/2]
+# id_1  = [0.5, 2,  math.pi/2]
+# id_0  = [0,  2,    math.pi/2]
 #---------------------------- End Marker map ----------------------------
 # ---------------------------- Socket ----------------------------
 IPC_IP = "172.18.222.108"   # Thay bằng IP của IPC
@@ -55,7 +65,7 @@ def normalize_angle_deg(angle):
 
 # ---------------------------- Bộ lọc Kalman đơn giản ----------------------------
 class SimpleKalman:
-    def __init__(self, q=0.01, r=0.1):
+    def __init__(self, q=0.1, r=0.01):
         self.q = q  # process noise
         self.r = r  # measurement noise
         self.p = 1.0
@@ -88,7 +98,7 @@ def should_filter_angle(vx, vy):
     return math.sqrt(vx**2 + vy**2) > 0.1  
 
 # ---------------------------- Hàm làm mượt pose ----------------------------
-def smooth_pose(x, y, yaw, window=5):
+def smooth_pose(x, y, yaw, window=3):
     global pose_buffer
     pose_buffer.append([x, y, yaw])
     if len(pose_buffer) > window:
@@ -165,7 +175,7 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # ------------------------- Biến và cờ trạng thái -------------------------
         self.running = False
         self.t = 0
-        self.dt = 0.01
+        self.dt = 0.02
         self.path_start_flag = 0
         self.stop_flag       = 0
         # safe defaults (important to avoid AttributeError on first update)
@@ -214,12 +224,12 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # Timer plot (100 Hz)
         self.timer_plot = QtCore.QTimer()
         self.timer_plot.timeout.connect(self.update_plot)
-        self.timer_plot.start(50)
+        self.timer_plot.start(30)
 
         # Timer send socket (100 Hz)
         self.timer_send = QtCore.QTimer()
         self.timer_send.timeout.connect(self.send_to_ipc)
-        self.timer_send.start(10)
+        self.timer_send.start(20)
         
         # ------------------------- connect button backend -------------------------
         self.Connect_btn.clicked.connect(self.connect_socket)
@@ -391,21 +401,40 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
                 return 0, L*(1 - 4*(s-0.75)), yaw_traj_desired, 0, -v, 0, a, 0, 0
 
         elif mode == "Circle":
+            # R = 0.5
+            # T = 40  # chu kỳ hoàn thành quỹ đạo (giây)
+            # w = 2*math.pi/T  # tần số góc
+            # if t >= T:  # Dừng tại điểm cuối (x=R, y=0)
+            #     return R, 0, yaw_traj_desired, 0, 0, 0, 0, 0, 0
+            # x = R*math.cos(w*t)
+            # y = R*math.sin(w*t)
+            # vx = -R*w*math.sin(w*t)
+            # vy =  R*w*math.cos(w*t)
+            # vyaw = 0
+            # ax = -R*(w**2)*math.cos(w*t)
+            # ay = -R*(w**2)*math.sin(w*t)
+            # ayaw = 0
+            # return x, y, yaw_traj_desired, vx, vy, vyaw, ax, ay, ayaw
             R = 0.5
-            T = 40  # chu kỳ hoàn thành quỹ đạo (giây)
-            w = 2*math.pi/T  # tần số góc
-            if t >= T:  # Dừng tại điểm cuối (x=R, y=0)
+            T = 40
+            w = 2*math.pi/T
+            if t >= T:
                 return R, 0, yaw_traj_desired, 0, 0, 0, 0, 0, 0
+
             x = R*math.cos(w*t)
             y = R*math.sin(w*t)
             vx = -R*w*math.sin(w*t)
             vy =  R*w*math.cos(w*t)
-            vyaw = 0
+
+            # Góc yaw theo hướng chuyển động
+            yaw = math.atan2(vy, vx)
+            vyaw = w   # tốc độ góc (xấp xỉ bằng w nếu theo tiếp tuyến)
+            
             ax = -R*(w**2)*math.cos(w*t)
             ay = -R*(w**2)*math.sin(w*t)
-            ayaw = 0
-            return x, y, yaw_traj_desired, vx, vy, vyaw, ax, ay, ayaw
+            ayaw = 0   # có thể tính đạo hàm yaw nếu cần chính xác
 
+            return x, y, yaw, vx, vy, vyaw, ax, ay, ayaw
         elif mode == "Line X":
             T = 10  # chu kỳ hoàn thành quỹ đạo (giây)
             v = 1.0/T  # tốc độ mong muốn, có thể chỉnh
@@ -495,7 +524,7 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.ekf_points.append([x_ekf, y_ekf])
     
         # Giới hạn số điểm để tránh lag
-        MAX_POINTS = 1000
+        MAX_POINTS = 2000
         if len(self.desired_points) > MAX_POINTS:
             self.desired_points.pop(0)
         if len(self.aruco_points) > MAX_POINTS:
@@ -507,9 +536,9 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # --- Vẽ quỹ đạo ---
         if not hasattr(self, "desired_line"):
             # Khởi tạo line chỉ một lần
-            self.desired_line, = self.ax1.plot([], [], 'r--', label="Desired", linewidth=0.8)
-            self.ekf_line,  = self.ax1.plot([], [], 'b--', label="EKF", linewidth=0.8)
-            self.aruco_line,  = self.ax1.plot([], [], 'g-', label="Aruco", linewidth=0.8)
+            self.desired_line, = self.ax1.plot([], [], 'r--', label="Desired", linewidth=1.3)
+            self.ekf_line,  = self.ax1.plot([], [], 'b--', label="EKF", linewidth=1.3)
+            self.aruco_line,  = self.ax1.plot([], [], 'g-', label="Aruco", linewidth=1.3)
             self.ax1.set_xlabel("x (cm)")
             self.ax1.set_ylabel("y (cm)")
             self.ax1.legend()
@@ -523,7 +552,7 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
 
         self.ax1.relim()
         self.ax1.autoscale_view()
-        # self.ax1.set_ylim(-1, 1)  # trục y từ 0 đến 10
+        # self.ax1.set_ylim(-0.5, 0.5)  # trục y từ 0 đến 10
         # self.ax1.autoscale_view(scalex=True, scaley=False)
         self.plot_widget.draw()
 
@@ -582,9 +611,9 @@ class ArucoApp(QtWidgets.QMainWindow, Ui_MainWindow):
 
         for ax in [self.ax2, self.ax3, self.ax4]:
             ax.relim()
-            ax.autoscale_view()
-            # ax.set_ylim(-1, 1)  # trục y từ 0 đến 10
-            # ax.autoscale_view(scalex=True, scaley=False)
+            # ax.autoscale_view()
+            ax.set_ylim(-1, 1)  # trục y từ 0 đến 10
+            ax.autoscale_view(scalex=True, scaley=False)
 
         self.plot_widget_1.draw()
         self.plot_widget_2.draw()
